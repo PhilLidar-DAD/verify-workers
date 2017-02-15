@@ -19,19 +19,21 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
 from pprint import pprint
+from settings import *
 import argparse
+import distutils
 import logging
 import multiprocessing
 import os
-import sys
-import subprocess
 import peewee
+import subprocess
+import sys
 
 # Logging settings
-_logger = logging.getLogger()
-_LOG_LEVEL = logging.DEBUG
-_CONS_LOG_LEVEL = logging.INFO
-_FILE_LOG_LEVEL = logging.DEBUG
+logger = logging.getLogger()
+LOG_LEVEL = logging.DEBUG
+CONS_LOG_LEVEL = logging.INFO
+FILE_LOG_LEVEL = logging.DEBUG
 
 # Create database
 #
@@ -40,28 +42,16 @@ _FILE_LOG_LEVEL = logging.DEBUG
 # MariaDB [(none)]> GRANT ALL PRIVILEGES ON verify_workers.* TO
 # 	verify_workers@'%' IDENTIFIED BY 'wS7BHFEcR5q7BSPmTr7C';
 
-# Database settings
-# MariaDB/Galera
-DB_HOST = 'galera01.prd.dream.upd.edu.ph'
-DB_PORT = '3307'
-DB_NAME = 'verify_workers'
-DB_USER = 'verify_workers'
-DB_PASS = 'wS7BHFEcR5q7BSPmTr7C'
-# Sqlite
-DB_FILE = 'verify_workers.db'
-
-# Multiprocessing settings
-_CPU_USAGE = .5
 
 # Define database models
-mysql_db = peewee.MySQLDatabase(
+MYSQL_DB = peewee.MySQLDatabase(
     DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
 
 
 class BaseModel(peewee.Model):
 
     class Meta:
-        database = mysql_db
+        database = MYSQL_DB
 
 
 class Job(BaseModel):
@@ -90,7 +80,7 @@ class Result(BaseModel):
         primary_key = peewee.CompositeKey('file_server', 'file_path')
 
 
-def _parse_arguments():
+def parse_arguments():
     # Parse arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--verbose', action="store_true")
@@ -100,48 +90,49 @@ def _parse_arguments():
     parser_update = subparsers.add_parser('update')
     parser_update.add_argument('update_dir_path')
 
-    parser.add_argument('action', choices=['start_worker'])
+    parser_start = subparsers.add_parser('start')
+    parser_start.add_argument('start_target', choices=['worker'])
 
     args = parser.parse_args()
     return args
 
 
-def _setup_logging(args):
+def setup_logging(args):
 
     # Setup logging
-    _logger.setLevel(_LOG_LEVEL)
+    logger.setLevel(LOG_LEVEL)
     formatter = logging.Formatter('[%(asctime)s] %(filename)s \
 (%(levelname)s,%(lineno)d)\t: %(message)s')
 
     # Check verbosity for console
     if args.verbose:
-        global _CONS_LOG_LEVEL
-        _CONS_LOG_LEVEL = logging.DEBUG
+        global CONS_LOG_LEVEL
+        CONS_LOG_LEVEL = logging.DEBUG
 
     # Setup console logging
     ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(_CONS_LOG_LEVEL)
+    ch.setLevel(CONS_LOG_LEVEL)
     ch.setFormatter(formatter)
-    _logger.addHandler(ch)
+    logger.addHandler(ch)
 
     # Setup file logging
     LOG_FILE = os.path.splitext(__file__)[0] + '.log'
     fh = logging.FileHandler(LOG_FILE, mode='w')
-    fh.setLevel(_FILE_LOG_LEVEL)
+    fh.setLevel(FILE_LOG_LEVEL)
     fh.setFormatter(formatter)
-    _logger.addHandler(fh)
+    logger.addHandler(fh)
 
 
-def _update(dir_path):
+def update(dir_path):
 
     # Check if directory path exists
     if not os.path.isdir(dir_path):
-        _logger.error("%s doesn't exist! Exiting.", dir_path)
+        logger.error("%s doesn't exist! Exiting.", dir_path)
         exit(1)
 
     # Get server
-    file_server = _get_file_server(args.update_dir_path)
-    _logger.info('file_server: %s', file_server)
+    file_server = get_file_server(args.update_dir_path)
+    logger.info('file_server: %s', file_server)
 
     # Traverse directories
     for root, dirs, files in os.walk(dir_path):
@@ -153,17 +144,17 @@ def _update(dir_path):
             # Assuming, first two directories of the path is always the mount
             # path
             path_tokens = root.split(os.sep)
-            _logger.debug('path_tokens: %s', path_tokens)
+            logger.debug('path_tokens: %s', path_tokens)
 
             dp = os.sep.join(path_tokens[3:])
-            _logger.info('%s', dp)
+            logger.info('%s', dp)
 
             # Add dir path as job
             Job.get_or_create(dir_path=dp,
                               file_server=file_server)
 
 
-def _get_file_server(dir_path):
+def get_file_server(dir_path):
     mount_out = subprocess.check_output(['mount'])
     for l in mount_out.split('\n')[:-1]:
         tokens = l.split(' on ')
@@ -172,34 +163,65 @@ def _get_file_server(dir_path):
         mount_path = tokens2[0]
         # Find mount path while ignoring root
         if mount_path != '/' and mount_path in dir_path:
-            # _logger.info('%s: %s', server_path, mount_path)
+            # logger.info('%s: %s', server_path, mount_path)
             # Assuming NFS mount, only get hostname (remove domain)
             server = server_path.split(':')[0].split('.')[0]
             return server
 
 
+def start_worker():
+
+    # Check if required binaries exist in path
+    check_binaries()
+
+    # Check if mapped network drives to the file servers are available
+    map_network_drives()
+
+
+def check_binaries():
+
+    # Add bin folder to PATH
+    os.environ['PATH'] = os.path.abspath(
+        'bin') + os.pathsep + os.environ['PATH']
+    logger.debug("os.environ['PATH']: %s", os.environ['PATH'])
+
+    # Check if binaries exist
+    for bin in BINS:
+        if distutils.spawn.find_executable(bin) is None:
+            print bin, 'is not in path! Exiting.'
+            exit(1)
+
+
+def map_network_drives():
+
+    # Get file server list
+    file_servers = [j.file_server
+                    for j in Job.select(Job.file_server).distinct()]
+    logger.debug('file_servers: %s', file_servers)
+
 if __name__ == "__main__":
 
     # Parge arguments
-    args = _parse_arguments()
+    args = parse_arguments()
 
     # Setup logging
-    _setup_logging(args)
-    _logger.debug('args: %s', args)
+    setup_logging(args)
+    logger.debug('args: %s', args)
 
     # Connect to database
-    mysql_db.connect()
-    mysql_db.create_tables([Job, Result], True)
+    MYSQL_DB.connect()
+    MYSQL_DB.create_tables([Job, Result], True)
 
     # Setup pool
     pool = multiprocessing.Pool(processes=int(multiprocessing.cpu_count() *
-                                              _CPU_USAGE))
+                                              CPU_USAGE))
 
     if 'update_dir_path' in args:
-        _logger.info('Update! %s', args.update_dir_path)
-        _update(args.update_dir_path)
-    elif args.action == 'start_worker':
-        pass
+        logger.info('Update! %s', args.update_dir_path)
+        update(args.update_dir_path)
+    elif 'start_target' in args:
+        if args.start_target == 'worker':
+            start_worker()
 
     # Close pool
     pool.close()
