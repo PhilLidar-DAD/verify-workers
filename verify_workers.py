@@ -343,15 +343,8 @@ def verify_file(file_path_):
     file_ext = os.path.splitext(file_path)[1].lower()
     logger.debug('%s: file_ext: %s', file_path, file_ext)
 
-    # Get last modified time
-    last_modified = os.stat(file_path).st_mtime
-    logger.debug('%s: last_modified: %s', file_path, last_modified)
-
-    # Compute checksum
-    shasum = subprocess.check_output(['sha1sum', file_path])
-    tokens = shasum.strip().split()
-    checksum = tokens[0]
-    logger.debug('%s: checksum: %s', file_path, checksum)
+    # Get checksums and last modified time
+    checksum, last_modified = get_checksums(file_path)
 
     is_processed = True
     is_corrupted = None
@@ -372,7 +365,7 @@ def verify_file(file_path_):
     result = {
         'file_ext': file_ext,
         'file_size': file_size,
-        'is_processed': is_processed
+        'is_processed': is_processed,
         'is_corrupted': is_corrupted,
         'remarks': remarks,
         'checksum': checksum,
@@ -380,6 +373,47 @@ def verify_file(file_path_):
     }
 
     return file_path, result
+
+
+def get_checksums(file_path):
+
+    dir_path, file_name = os.path.split(file_path)
+
+    # Check if SHA1SUMS file already exists
+    sha1sum_filepath = os.path.join(dir_path, 'SHA1SUMS')
+    if os.path.isfile(sha1sum_filepath):
+        # Read files from SHA1SUM file that already have checksums
+        logger.debug('%s: Reading checksum...', file_path)
+        with open(sha1sum_filepath, 'r') as open_file:
+            for line in open_file:
+                tokens = line.strip().split()
+                # Strip wildcard from filename if it exists
+                fn = tokens[1]
+                if fn.startswith('?'):
+                    fn = fn[1:]
+                if fn == file_name:
+                    checksum = tokens[0]
+    else:
+        # Compute checksum
+        logger.debug('%s: Computing checksum...', file_path)
+        shasum = subprocess.check_output(['sha1sum', file_path])
+        tokens = shasum.strip().split()
+        checksum = tokens[0]
+    logger.debug('%s: checksum: %s', file_path, checksum)
+
+    # Check if LAST_MODIFIED file already exists
+    last_modified_filepath = os.path.join(dir_path, 'LAST_MODIFIED')
+    if os.path.isfile(last_modified_filepath):
+        logger.debug('%s: Reading last modified time...', file_path)
+        last_modified_all = json.load(open(last_modified_filepath, 'r'))
+        last_modified = last_modified_all[file_name]
+    else:
+        # Get last modified time
+        logger.debug('%s: Getting last modified time...', file_path)
+        last_modified = os.stat(file_path).st_mtime
+    logger.debug('%s: last_modified: %s', file_path, last_modified)
+
+    return checksum, last_modified
 
 
 def verify_raster(file_path):
