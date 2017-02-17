@@ -301,13 +301,13 @@ def verify_dir(job):
             file_list.append(fp)
 
     # Verify files
-    # results = pool.map_async(verify_file, file_list)
-    # for r in results.get():
+    results = pool.map_async(verify_file, file_list)
+    for r in results.get():
 
-    for fp in file_list:
+        # for fp in file_list:
 
-        # fp_drv, res = r
-        fp_drv, res = verify_file(fp)
+        fp_drv, res = r
+        # fp_drv, res = verify_file(fp)
 
         logger.debug('%s: %s', fp_drv, res)
         if res is not None:
