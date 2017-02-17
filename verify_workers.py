@@ -38,14 +38,6 @@ LOG_LEVEL = logging.DEBUG
 CONS_LOG_LEVEL = logging.INFO
 FILE_LOG_LEVEL = logging.DEBUG
 
-# Create database
-#
-# root@mariadb01 ~ # mysql -uroot -p
-# MariaDB [(none)]> CREATE DATABASE verify_workers CHARACTER SET utf8 COLLATE utf8_bin;
-# MariaDB [(none)]> GRANT ALL PRIVILEGES ON verify_workers.* TO
-# 	verify_workers@'%' IDENTIFIED BY 'wS7BHFEcR5q7BSPmTr7C';
-
-
 # Define database models
 MYSQL_DB = peewee.MySQLDatabase(
     DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
@@ -153,6 +145,10 @@ def update(dir_path):
             logger.debug('path_tokens: %s', path_tokens)
 
             dp = os.sep.join(path_tokens[3:])
+
+            # Remove trailing os separator
+            if dp[-1] == os.sep:
+                dp = dp[:-1]
             logger.info('%s', dp)
 
             # Add dir path as job
