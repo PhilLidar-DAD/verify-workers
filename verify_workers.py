@@ -23,6 +23,7 @@ from pprint import pprint
 from settings import *
 import argparse
 import distutils
+import json
 import logging
 import multiprocessing
 import os
@@ -126,7 +127,7 @@ def setup_logging(args):
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-
+@MYSQL_DB.atomic()
 def update(dir_path):
 
     # Check if directory path exists
@@ -187,11 +188,14 @@ def start_worker():
 
     # Get directory to verify from db
     while True:
-        job = Job.get((Job.status == None) |
-                      (Job.status == 0 & Job.work_expiry < datetime.now()))
-        if job:
+        try:
+            job = Job.get((Job.status == None) | ((Job.status == 0) & (Job.work_expiry < datetime.now())))
+            logger.info('Found job: %s:%s', job.file_server, job.dir_path)
             verify_dir(job)
+        except Exception:
+            logger.exception('Error running job!')
         # Sleep for 5mins
+        logger.info('Sleeping for 5mins...')
         time.sleep(300)
 
 
@@ -212,7 +216,6 @@ def check_binaries():
 def map_network_drives():
 
     def all_ok():
-        a_ok = True
         net_use_out = subprocess.check_output(['net', 'use'])
         for line in net_use_out.split('\r\n'):
             l = line.strip()
@@ -231,8 +234,12 @@ def map_network_drives():
                             if status != 'OK':
                                 logger.debug('Remap! %s %s %s', status,
                                              local, remote)
-                                a_ok = False
         logger.debug('FILE_SERVERS: %s', FILE_SERVERS)
+
+        a_ok = True
+        for f, v in FILE_SERVERS.viewitems():
+            if 'status' not in v or v['status'] != 'OK':
+                a_ok = False
         return a_ok
 
     # Get file server list
@@ -265,11 +272,11 @@ def map_network_drives():
             logger.error('Error mapping network drives! Exiting.')
             exit(1)
 
-
+@MYSQL_DB.atomic()
 def verify_dir(job):
     # Set working status
     job.status = 0
-    job.work_expiry = datetime.now() + timedelta(hours=1)  # set time limit to 1hr
+    job.work_expiry = datetime.now() + timedelta(hours=2)  # set time limit to 2hrs
     job.save()
     logger.info('%s:%s Verifying...', job.file_server, job.dir_path)
 
@@ -306,7 +313,7 @@ def verify_dir(job):
         logger.debug('%s: %s', fp_drv, res)
         if res is not None:
             # Get file path without drive name
-            fp = os.path.splitdrive(fp_drv)[1]
+            fp = os.path.splitdrive(fp_drv)[1][1:]
             logger.info('Saving: %s', fp)
             # Add result to db
             db_res, created = Result.get_or_create(file_server=job.file_server,
@@ -316,7 +323,9 @@ def verify_dir(job):
             if not created:
                 logger.info('Updating: %s', fp)
                 for k, v in res.viewitems():
-                    db_res[k] = v
+                    # db_res[k] = v
+                    logger.debug('Execute: %s', 'db_res.' + k + ' = v')
+                    exec('db_res.' + k + ' = v')
                 db_res.save()
 
     # Set done status
@@ -336,7 +345,7 @@ def verify_file(file_path_):
     logger.debug('file_path: %s', file_path)
 
     # Get file size
-    file_size = os.path.getsize(fp)
+    file_size = os.path.getsize(file_path)
     logger.debug('%s: file_size: %s', file_path, file_size)
 
     # Check file extension
@@ -349,8 +358,10 @@ def verify_file(file_path_):
 
     # Compute checksum
     shasum = subprocess.check_output(['sha1sum', file_path])
+    # logger.debug('%s: shasum: %s', file_path, shasum)
     tokens = shasum.strip().split()
-    checksum = tokens[0]
+    # logger.debug('%s: tokens: %s', file_path, tokens)
+    checksum = tokens[0][1:]
     logger.debug('%s: checksum: %s', file_path, checksum)
 
     is_processed = True
@@ -372,7 +383,7 @@ def verify_file(file_path_):
     result = {
         'file_ext': file_ext,
         'file_size': file_size,
-        'is_processed': is_processed
+        'is_processed': is_processed,
         'is_corrupted': is_corrupted,
         'remarks': remarks,
         'checksum': checksum,
@@ -493,8 +504,8 @@ def verify_las(file_path):
 
         if 'warning' in line:
             return True
-        if 'never classified' in line:
-            return True
+        # if 'never classified' in line:
+        #     return True
 
     return False
 
