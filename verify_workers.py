@@ -198,7 +198,7 @@ def start_worker():
             logger.exception('Error running job!')
         # Sleep for 5mins
         logger.info('Sleeping for 5mins...')
-        time.sleep(300)
+        time.sleep(60 * 5)
 
 
 def check_binaries():
@@ -390,8 +390,10 @@ def verify_file(file_path_):
 def get_checksums(file_path):
 
     dir_path, file_name = os.path.split(file_path)
+    # logger.debug('%s: file_name: %s', file_path, repr(file_name))
 
     # Check if SHA1SUMS file already exists
+    checksum = None
     sha1sum_filepath = os.path.join(dir_path, 'SHA1SUMS')
     if os.path.isfile(sha1sum_filepath):
         # Read files from SHA1SUM file that already have checksums
@@ -403,9 +405,10 @@ def get_checksums(file_path):
                 fn = tokens[1]
                 if fn.startswith('?'):
                     fn = fn[1:]
+                # logger.debug('%s: fn: %s', file_path, repr(fn))
                 if fn == file_name:
                     checksum = tokens[0]
-    else:
+    if not checksum:
         # Compute checksum
         logger.debug('%s: Computing checksum...', file_path)
         shasum = subprocess.check_output(['sha1sum', file_path])
@@ -414,12 +417,14 @@ def get_checksums(file_path):
     logger.debug('%s: checksum: %s', file_path, checksum)
 
     # Check if LAST_MODIFIED file already exists
+    last_modified = None
     last_modified_filepath = os.path.join(dir_path, 'LAST_MODIFIED')
     if os.path.isfile(last_modified_filepath):
         logger.debug('%s: Reading last modified time...', file_path)
         last_modified_all = json.load(open(last_modified_filepath, 'r'))
-        last_modified = last_modified_all[file_name]
-    else:
+        if file_name in last_modified_all:
+            last_modified = last_modified_all[file_name]
+    if not last_modified:
         # Get last modified time
         logger.debug('%s: Getting last modified time...', file_path)
         last_modified = os.stat(file_path).st_mtime
