@@ -372,7 +372,7 @@ def verify_file(file_path_):
     result = {
         'file_ext': file_ext,
         'file_size': file_size,
-        'is_processed': is_processed
+        'is_processed': is_processed,
         'is_corrupted': is_corrupted,
         'remarks': remarks,
         'checksum': checksum,
