@@ -186,58 +186,13 @@ def start_worker():
     map_network_drives()
 
     # Get directory to verify from db
-    job = Job.get((Job.status == None) |
-                  (Job.status == 0 & Job.work_expiry < datetime.now()))
-    job.status = 0
-    job.work_expiry = datetime.now() + timedelta(hours=1)  # set time limit to 1hr
-    job.save()
-    logger.info('Verifying: %s:%s', job.file_server, job.dir_path)
-
-    # Get local dir path
-    dir_path = os.path.abspath(os.path.join(
-        FILE_SERVERS[job.file_server]['local'], job.dir_path))
-    logger.info('Local directory: %s', dir_path)
-    if not os.path.isdir(dir_path):
-        logger.error("%s doesn't exist! Exiting.")
-        exit(1)
-
-    # Get file list
-    file_list = []
-    for f in os.listdir(dir_path):
-        fp = os.path.join(dir_path, f)
-        if os.path.isfile(fp):
-            # file_size = os.path.getsize(fp)
-            # file_list[fp] = {'file_size': file_size,
-            #                  'file_ext': None,
-            #                  'is_corrupted': None,
-            #                  'is_processed': False,
-            #                  'remarks': ''}
-            file_list.append(fp)
-
-    # Verify files
-    # results = pool.map_async(verify_file, file_list)
-    # for r in results.get():
-
-    for fp in file_list:
-
-        # fp_drv, res = r
-        fp_drv, res = verify_file(fp)
-
-        logger.debug('%s: %s', fp_drv, res)
-        if res is not None:
-            # Get file path without drive name
-            fp = os.path.splitdrive(fp_drv)[1]
-            logger.info('Saving: %s', fp)
-            # Add result to db
-            db_res, created = Result.get_or_create(file_server=job.file_server,
-                                                   file_path=fp, defaults=res)
-            logger.debug('%s, %s', db_res, created)
-            # If not created, update result in db
-            if not created:
-                logger.info('Updating: %s', fp)
-                for k, v in res.viewitems():
-                    db_res[k] = v
-                db_res.save()
+    while True:
+        job = Job.get((Job.status == None) |
+                      (Job.status == 0 & Job.work_expiry < datetime.now()))
+        if job:
+            verify_dir(job)
+        # Sleep for 5mins
+        time.sleep(300)
 
 
 def check_binaries():
@@ -309,6 +264,66 @@ def map_network_drives():
         if not all_ok():
             logger.error('Error mapping network drives! Exiting.')
             exit(1)
+
+
+def verify_dir(job):
+    # Set working status
+    job.status = 0
+    job.work_expiry = datetime.now() + timedelta(hours=1)  # set time limit to 1hr
+    job.save()
+    logger.info('%s:%s Verifying...', job.file_server, job.dir_path)
+
+    # Get local dir path
+    dir_path = os.path.abspath(os.path.join(
+        FILE_SERVERS[job.file_server]['local'], job.dir_path))
+    logger.info('Local directory: %s', dir_path)
+    if not os.path.isdir(dir_path):
+        logger.error("%s doesn't exist! Exiting.")
+        exit(1)
+
+    # Get file list
+    file_list = []
+    for f in os.listdir(dir_path):
+        fp = os.path.join(dir_path, f)
+        if os.path.isfile(fp):
+            # file_size = os.path.getsize(fp)
+            # file_list[fp] = {'file_size': file_size,
+            #                  'file_ext': None,
+            #                  'is_corrupted': None,
+            #                  'is_processed': False,
+            #                  'remarks': ''}
+            file_list.append(fp)
+
+    # Verify files
+    # results = pool.map_async(verify_file, file_list)
+    # for r in results.get():
+
+    for fp in file_list:
+
+        # fp_drv, res = r
+        fp_drv, res = verify_file(fp)
+
+        logger.debug('%s: %s', fp_drv, res)
+        if res is not None:
+            # Get file path without drive name
+            fp = os.path.splitdrive(fp_drv)[1]
+            logger.info('Saving: %s', fp)
+            # Add result to db
+            db_res, created = Result.get_or_create(file_server=job.file_server,
+                                                   file_path=fp, defaults=res)
+            logger.debug('%s, %s', db_res, created)
+            # If not created, update result in db
+            if not created:
+                logger.info('Updating: %s', fp)
+                for k, v in res.viewitems():
+                    db_res[k] = v
+                db_res.save()
+
+    # Set done status
+    job.status = 1
+    job.work_expiry = None
+    job.save()
+    logger.info('%s:%s Done!', job.file_server, job.dir_path)
 
 
 def verify_file(file_path_):
