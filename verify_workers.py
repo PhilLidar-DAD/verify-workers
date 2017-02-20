@@ -191,7 +191,6 @@ def map_network_drives():
 
     # Get map network drives status
     if not all_ok():
-        logger.info('...')
         # Remap network drives
         for f, v in FILE_SERVERS.viewitems():
             logger.debug('%s: %s', f, v)
@@ -218,7 +217,7 @@ def start_worker(worker_id):
 
     # Delay start by (worker id)*5 seconds
     delay = worker_id * 5
-    logger.info('[Worker-%s] Delay start for %secs...', worker_id, delay)
+    logger.info('[Worker-%s] Delay start for %ssecs...', worker_id, delay)
     time.sleep(delay)
 
     # Connect to database
@@ -272,7 +271,7 @@ def verify_dir(worker_id, job):
     # Verify files
     logger.info('[Worker-%s] Verifying files...', worker_id)
     for fp in file_list.viewkeys():
-        file_list[fp] = verify_file(fp)
+        file_list[fp] = verify_file(worker_id, fp)
 
     # Save results to db
     logger.info('[Worker-%s] Saving results to db...', worker_id)
@@ -307,7 +306,7 @@ def verify_dir(worker_id, job):
                     job.dir_path)
 
 
-def verify_file(file_path_):
+def verify_file(worker_id, file_path_):
 
     # Check if file exists
     file_path = os.path.abspath(file_path_)
@@ -570,6 +569,10 @@ if __name__ == "__main__":
             logger.info('Starting %s workers...', WORKERS)
             for worker_id in range(1, WORKERS + 1):
                 logger.info('Starting worker %s...', worker_id)
-                # Start worker thread
-                threading.Thread(target=start_worker,
-                                 args=(worker_id,)).start()
+                try:
+                    # Start worker thread
+                    threading.Thread(target=start_worker,
+                                     args=(worker_id,)).start()
+                except Exception:
+                    logger.exception('[Worker-%s] Error running worker!',
+                                     worker_id)
