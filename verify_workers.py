@@ -26,12 +26,12 @@ import argparse
 import distutils
 import json
 import logging
-import multiprocessing
 import os
+import random
 import subprocess
 import sys
-import time
 import threading
+import time
 
 # Logging settings
 logger = logging.getLogger()
@@ -217,6 +217,11 @@ def map_network_drives():
 
 def start_worker(worker_id):
 
+    # Delay start by (worker id)*5 seconds
+    delay = worker_id * 5
+    logger.info('[Worker-%s] Delay start for %secs...', worker_id, delay)
+    time.sleep(delay)
+
     # Connect to database
     logger.info('[Worker-%s] Connecting to database...', worker_id)
     MYSQL_DB.connect()
@@ -237,31 +242,32 @@ def start_worker(worker_id):
         time.sleep(60 * 5)
 
 
-@MYSQL_DB.atomic()
+# @MYSQL_DB.atomic()
 def verify_dir(worker_id, job):
 
-    # Set working status
-    job.status = 0
-    job.work_expiry = datetime.now() + timedelta(hours=2)  # set time limit to 2hrs
-    job.save()
-    logger.info('[Worker-%s] %s:%s Verifying...', worker_id, job.file_server,
-                job.dir_path)
+    with MYSQL_DB.atomic() as txn:
+        # Set working status
+        job.status = 0
+        job.work_expiry = datetime.now() + timedelta(hours=2)  # set time limit to 2hrs
+        job.save()
+        logger.info('[Worker-%s] %s:%s Verifying...', worker_id, job.file_server,
+                    job.dir_path)
 
     # Get local dir path
     dir_path = os.path.abspath(os.path.join(
-        FILE_SERVERS[job.file_server]['local'], worker_id, job.dir_path))
-    logger.info('[Worker-%s] Local directory: %s', dir_path)
+        FILE_SERVERS[job.file_server]['local'], job.dir_path))
+    logger.info('[Worker-%s] Local directory: %s', worker_id, dir_path)
     if not os.path.isdir(dir_path):
         logger.error("[Worker-%s] %s doesn't exist! Exiting.", worker_id,
                      dir_path)
         exit(1)
 
     # Get file list
-    file_list = []
+    file_list = {}
     for f in os.listdir(dir_path):
         fp = os.path.join(dir_path, f)
         if os.path.isfile(fp):
-            file_list.append(fp)
+            file_list[fp] = None
     logger.debug('[Worker-%s] file_list:\n%s', worker_id,
                  pformat(file_list, width=40))
 
@@ -273,36 +279,43 @@ def verify_dir(worker_id, job):
 
     # for r in results.get():
 
-    for fp in file_list:
+    for fp in file_list.viewkeys():
+        file_list[fp] = verify_file(fp)
 
-        # fp_drv, res = r
-        fp_drv, res = verify_file(fp)
 
-        logger.debug('[Worker-%s][%s] %s', worker_id, fp_drv, res)
-        if res is not None:
-            # Get file path without drive name
-            fp = os.path.splitdrive(fp_drv)[1][1:]
-            logger.info('[Worker-%s] Saving: %s', worker_id, fp)
-            # Add result to db
-            db_res, created = Result.get_or_create(file_server=job.file_server,
-                                                   file_path=fp, defaults=res)
-            logger.debug('%s, %s', db_res, created)
-            # If not created, update result in db
-            if not created:
-                logger.info('[Worker-%s] Updating: %s', worker_id, fp)
-                for k, v in res.viewitems():
-                    # db_res[k] = v
-                    logger.debug('[Worker-%s] Execute: %s', worker_id,
-                                 'db_res.' + k + ' = v')
-                    exec('db_res.' + k + ' = v')
-                db_res.save()
+    # Add results to db
+    with MYSQL_DB.atomic() as txn:
+        for fp, v in file_list.viewitems():
 
-    # Set done status
-    job.status = 1
-    job.work_expiry = None
-    job.save()
-    logger.info('[Worker-%s] %s:%s Done!', worker_id, job.file_server,
-                job.dir_path)
+            # fp_drv, res = r
+            # fp_drv, res = verify_file(fp)
+            fp_drv, res = v
+
+            logger.debug('[Worker-%s][%s] %s', worker_id, fp_drv, res)
+            if res is not None:
+                # Get file path without drive name
+                fp = os.path.splitdrive(fp_drv)[1][1:]
+                logger.info('[Worker-%s] Saving: %s', worker_id, fp)
+                # Add result to db
+                db_res, created = Result.get_or_create(file_server=job.file_server,
+                                                       file_path=fp, defaults=res)
+                logger.debug('%s, %s', db_res, created)
+                # If not created, update result in db
+                if not created:
+                    # logger.info('[Worker-%s] Updating: %s', worker_id, fp)
+                    for k, v in res.viewitems():
+                        # db_res[k] = v
+                        logger.debug('[Worker-%s] Execute: %s', worker_id,
+                                     'db_res.' + k + ' = v')
+                        exec('db_res.' + k + ' = v')
+                    db_res.save()
+
+        # Set done status
+        job.status = 1
+        job.work_expiry = None
+        job.save()
+        logger.info('[Worker-%s] %s:%s Done!', worker_id, job.file_server,
+                    job.dir_path)
 
 
 def verify_file(file_path_):
@@ -357,7 +370,7 @@ remarks: %s', worker_id, file_path, is_processed, is_corrupted, remarks)
     return file_path, result
 
 
-def get_checksums((worker_id, file_path):
+def get_checksums(worker_id, file_path):
 
     dir_path, file_name=os.path.split(file_path)
     # logger.debug('%s: file_name: %s', file_path, repr(file_name))
@@ -385,7 +398,7 @@ def get_checksums((worker_id, file_path):
         #     file_path)
         shasum = subprocess.check_output(['sha1sum', file_path])
         tokens = shasum.strip().split()
-        checksum = tokens[0]
+        checksum = tokens[0][1:]
     # logger.debug('[Worker-%s][%s] checksum: %s', worker_id, file_path,
     #     checksum)
 
@@ -589,11 +602,11 @@ if __name__ == "__main__":
             # for worker_id in range(1,
             #                        int(multiprocessing.cpu_count() * CPU_USAGE)
             #                        + 1):
-            for worker_id in range(1, 2):
+            for worker_id in range(1, 3):
                 logger.info('Starting worker %s...', worker_id)
                 # start_worker(worker_id)
                 # Start worker thread
-                threading.Thread(start_worker, args=(worker_id,)).start()
+                threading.Thread(target=start_worker, args=(worker_id,)).start()
 
     # Close pool
     # pool.close()
