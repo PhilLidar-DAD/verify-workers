@@ -135,7 +135,6 @@ def get_file_server(dir_path):
             mount_path = tokens2[0]
             # Find mount path while ignoring root
             if mount_path != '/' and mount_path in dir_path:
-                # logger.info('%s: %s', server_path, mount_path)
                 # Assuming NFS mount, only get hostname (remove domain)
                 server = server_path.split(':')[0].split('.')[0]
                 return server
@@ -225,7 +224,6 @@ def start_worker(worker_id):
     # Connect to database
     logger.info('[Worker-%s] Connecting to database...', worker_id)
     MYSQL_DB.connect()
-    # MYSQL_DB.create_tables([Job, Result], True)
 
     # Get directory to verify from db
     while True:
@@ -242,7 +240,6 @@ def start_worker(worker_id):
         time.sleep(60 * 5)
 
 
-# @MYSQL_DB.atomic()
 def verify_dir(worker_id, job):
 
     with MYSQL_DB.atomic() as txn:
@@ -272,23 +269,13 @@ def verify_dir(worker_id, job):
                  pformat(file_list, width=40))
 
     # Verify files
-    # results = pool.map_async(verify_file, file_list)
-    # pprint(results.wait())
-    # pprint(results.get())
-    # exit(1)
-
-    # for r in results.get():
-
     for fp in file_list.viewkeys():
         file_list[fp] = verify_file(fp)
-
 
     # Add results to db
     with MYSQL_DB.atomic() as txn:
         for fp, v in file_list.viewitems():
 
-            # fp_drv, res = r
-            # fp_drv, res = verify_file(fp)
             fp_drv, res = v
 
             logger.debug('[Worker-%s][%s] %s', worker_id, fp_drv, res)
@@ -302,7 +289,6 @@ def verify_dir(worker_id, job):
                 logger.debug('%s, %s', db_res, created)
                 # If not created, update result in db
                 if not created:
-                    # logger.info('[Worker-%s] Updating: %s', worker_id, fp)
                     for k, v in res.viewitems():
                         # db_res[k] = v
                         logger.debug('[Worker-%s] Execute: %s', worker_id,
@@ -372,16 +358,13 @@ remarks: %s', worker_id, file_path, is_processed, is_corrupted, remarks)
 
 def get_checksums(worker_id, file_path):
 
-    dir_path, file_name=os.path.split(file_path)
-    # logger.debug('%s: file_name: %s', file_path, repr(file_name))
+    dir_path, file_name = os.path.split(file_path)
 
     # Check if SHA1SUMS file already exists
-    checksum=None
-    sha1sum_filepath=os.path.join(dir_path, 'SHA1SUMS')
+    checksum = None
+    sha1sum_filepath = os.path.join(dir_path, 'SHA1SUMS')
     if os.path.isfile(sha1sum_filepath):
         # Read files from SHA1SUM file that already have checksums
-        # logger.debug('[Worker-%s][%s] Reading checksum...', worker_id,
-        #     file_path)
         with open(sha1sum_filepath, 'r') as open_file:
             for line in open_file:
                 tokens = line.strip().split()
@@ -389,35 +372,25 @@ def get_checksums(worker_id, file_path):
                 fn = tokens[1]
                 if fn.startswith('?'):
                     fn = fn[1:]
-                # logger.debug('%s: fn: %s', file_path, repr(fn))
                 if fn == file_name:
                     checksum = tokens[0]
     if not checksum:
         # Compute checksum
-        # logger.debug('[Worker-%s][%s] Computing checksum...', worker_id,
-        #     file_path)
         shasum = subprocess.check_output(['sha1sum', file_path])
         tokens = shasum.strip().split()
         checksum = tokens[0][1:]
-    # logger.debug('[Worker-%s][%s] checksum: %s', worker_id, file_path,
-    #     checksum)
 
     # Check if LAST_MODIFIED file already exists
     last_modified = None
     last_modified_filepath = os.path.join(dir_path, 'LAST_MODIFIED')
     if os.path.isfile(last_modified_filepath):
-        # logger.debug('[Worker-%s][%s] Reading last modified time...',
-        #     worker_id, file_path)
+
         last_modified_all = json.load(open(last_modified_filepath, 'r'))
         if file_name in last_modified_all:
             last_modified = last_modified_all[file_name]
     if not last_modified:
         # Get last modified time
-        # logger.debug('[Worker-%s][%s] Getting last modified time...',
-        #     worker_id, file_path)
         last_modified = os.stat(file_path).st_mtime
-    # logger.debug('[Worker-%s][%s] last_modified: %s',
-    #         worker_id, file_path, last_modified)
 
     return checksum, last_modified
 
@@ -431,9 +404,9 @@ def verify_raster(file_path):
         proc = subprocess.Popen(
             ['gdalinfo', '-checksum', file_path], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT)
-        out, err=proc.communicate()
-        returncode=proc.returncode
-        output={'out': str(out).lower(),
+        out, err = proc.communicate()
+        returncode = proc.returncode
+        output = {'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
@@ -463,9 +436,9 @@ def verify_vector(file_path):
         proc = subprocess.Popen(
             ['ogrinfo', '-al', file_path], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT)
-        out, err=proc.communicate()
-        returncode=proc.returncode
-        output={'out': str(out).lower(),
+        out, err = proc.communicate()
+        returncode = proc.returncode
+        output = {'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
@@ -500,9 +473,9 @@ def verify_las(file_path):
         proc = subprocess.Popen(
             ['lasinfo', file_path], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT)
-        out, err=proc.communicate()
-        returncode=proc.returncode
-        output={'out': str(out).lower(),
+        out, err = proc.communicate()
+        returncode = proc.returncode
+        output = {'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
@@ -548,9 +521,9 @@ def verify_archive(file_path):
         proc = subprocess.Popen(
             ['7za', 't', file_path], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT)
-        out, err=proc.communicate()
-        returncode=proc.returncode
-        output={'out': str(out).lower(),
+        out, err = proc.communicate()
+        returncode = proc.returncode
+        output = {'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
@@ -576,14 +549,6 @@ if __name__ == "__main__":
     setup_logging(args)
     logger.debug('args: %s', args)
 
-    # multiprocessing.freeze_support()
-
-    # Setup pool
-    # logger.info('Setting up pool...')
-    # pool = multiprocessing.Pool(processes=int(multiprocessing.cpu_count() *
-    #                                           CPU_USAGE))
-    # pool = multiprocessing.Pool(1)
-
     if 'update_dir_path' in args:
         logger.info('Update! %s', args.update_dir_path)
         update(args.update_dir_path)
@@ -599,15 +564,8 @@ if __name__ == "__main__":
             logger.info('Mapping network drives...')
             map_network_drives()
 
-            # for worker_id in range(1,
-            #                        int(multiprocessing.cpu_count() * CPU_USAGE)
-            #                        + 1):
-            for worker_id in range(1, 3):
+            for worker_id in range(1, WORKERS + 1):
                 logger.info('Starting worker %s...', worker_id)
-                # start_worker(worker_id)
                 # Start worker thread
-                threading.Thread(target=start_worker, args=(worker_id,)).start()
-
-    # Close pool
-    # pool.close()
-    # pool.join()
+                threading.Thread(target=start_worker,
+                                 args=(worker_id,)).start()
