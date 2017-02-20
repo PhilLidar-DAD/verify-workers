@@ -400,8 +400,16 @@ def get_checksums(worker_id, file_path):
 def verify_raster(file_path):
 
     outfile = file_path + '.gdalinfo'
+    output = None
     # Check if json output file exists
-    if not os.path.isfile(outfile):
+    if os.path.isfile(outfile):
+        try:
+            # Load output from json file
+            output = json.load(open(outfile, 'r'))
+        except Exception:
+            pass
+
+    if output is None:
         # Process file and redirect output to json file
         proc = subprocess.Popen(
             ['gdalinfo', '-checksum', file_path], stdout=subprocess.PIPE,
@@ -413,8 +421,6 @@ def verify_raster(file_path):
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
 
-    # Load output from json file
-    output = json.load(open(outfile, 'r'))
     # Determine if file is corrupted from output
     if output['returncode'] != 0:
         if 'failed to open grid statistics file' in output['out']:
@@ -432,8 +438,16 @@ gdalinfo -checksum {raster_path} output)'
 def verify_vector(file_path):
 
     outfile = file_path + '.ogrinfo'
+    output = None
     # Check if json output file exists
-    if not os.path.isfile(outfile):
+    if os.path.isfile(outfile):
+        try:
+            # Load output from json file
+            output = json.load(open(outfile, 'r'))
+        except Exception:
+            pass
+
+    if output is None:
         # Process file and redirect output to json file
         proc = subprocess.Popen(
             ['ogrinfo', '-al', file_path], stdout=subprocess.PIPE,
@@ -445,8 +459,6 @@ def verify_vector(file_path):
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
 
-    # Load output from json file
-    output = json.load(open(outfile, 'r'))
     # Determine if file is corrupted from output
     if output['returncode'] != 0:
         return True
@@ -469,8 +481,16 @@ def verify_vector(file_path):
 def verify_las(file_path):
 
     outfile = file_path + '.lasinfo'
+    output = None
     # Check if json output file exists
-    if not os.path.isfile(outfile):
+    if os.path.isfile(outfile):
+        try:
+            # Load output from json file
+            output = json.load(open(outfile, 'r'))
+        except Exception:
+            pass
+
+    if output is None:
         # Process file and redirect output to json file
         proc = subprocess.Popen(
             ['lasinfo', file_path], stdout=subprocess.PIPE,
@@ -482,8 +502,6 @@ def verify_las(file_path):
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
 
-    # Load output from json file
-    output = json.load(open(outfile, 'r'))
     # Determine if file is corrupted from output
     if output['returncode'] != 0:
         return True
@@ -517,8 +535,16 @@ def verify_las(file_path):
 def verify_archive(file_path):
 
     outfile = file_path + '.7za'
+    output = None
     # Check if json output file exists
-    if not os.path.isfile(outfile):
+    if os.path.isfile(outfile):
+        try:
+            # Load output from json file
+            output = json.load(open(outfile, 'r'))
+        except Exception:
+            pass
+
+    if output is None:
         # Process file and redirect output to json file
         proc = subprocess.Popen(
             ['7za', 't', file_path], stdout=subprocess.PIPE,
