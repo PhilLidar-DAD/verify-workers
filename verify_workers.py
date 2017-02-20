@@ -19,7 +19,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
 from datetime import datetime, timedelta
-from pprint import pprint
+from models import *
+from pprint import pprint, pformat
 from settings import *
 import argparse
 import distutils
@@ -27,7 +28,6 @@ import json
 import logging
 import multiprocessing
 import os
-import peewee
 import subprocess
 import sys
 import time
@@ -38,43 +38,7 @@ LOG_LEVEL = logging.DEBUG
 CONS_LOG_LEVEL = logging.INFO
 FILE_LOG_LEVEL = logging.DEBUG
 
-# Define database models
-MYSQL_DB = peewee.MySQLDatabase(
-    DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
 
-
-class BaseModel(peewee.Model):
-
-    class Meta:
-        database = MYSQL_DB
-
-
-class Job(BaseModel):
-    file_server = peewee.CharField()
-    dir_path = peewee.CharField()
-    status = peewee.IntegerField(choices=[(0, 'Working'),
-                                          (1, 'Done')],
-                                 null=True)
-    work_expiry = peewee.DateTimeField(null=True)
-
-    class Meta:
-        primary_key = peewee.CompositeKey('file_server', 'dir_path')
-
-
-class Result(BaseModel):
-    file_server = peewee.CharField()
-    file_path = peewee.CharField()
-    file_ext = peewee.CharField()
-    file_size = peewee.BigIntegerField()
-    is_processed = peewee.BooleanField()
-    is_corrupted = peewee.BooleanField(null=True)
-    remarks = peewee.CharField(null=True)
-    checksum = peewee.CharField()
-    last_modified = peewee.BigIntegerField()
-    uploaded = peewee.DateTimeField(null=True)
-
-    class Meta:
-        primary_key = peewee.CompositeKey('file_server', 'file_path')
 
 
 def parse_arguments():
@@ -271,67 +235,67 @@ def map_network_drives():
             exit(1)
 
 
-@MYSQL_DB.atomic()
 def verify_dir(job):
-    # Set working status
-    job.status = 0
-    job.work_expiry = datetime.now() + timedelta(hours=2)  # set time limit to 2hrs
-    job.save()
-    logger.info('%s:%s Verifying...', job.file_server, job.dir_path)
 
-    # Get local dir path
-    dir_path = os.path.abspath(os.path.join(
-        FILE_SERVERS[job.file_server]['local'], job.dir_path))
-    logger.info('Local directory: %s', dir_path)
-    if not os.path.isdir(dir_path):
-        logger.error("%s doesn't exist! Exiting.")
+    with MYSQL_DB.atomic() as txn:    
+        # Set working status
+        job.status = 0
+        job.work_expiry = datetime.now() + timedelta(hours=2)  # set time limit to 2hrs
+        job.save()
+        logger.info('%s:%s Verifying...', job.file_server, job.dir_path)
+
+        # Get local dir path
+        dir_path = os.path.abspath(os.path.join(
+            FILE_SERVERS[job.file_server]['local'], job.dir_path))
+        logger.info('Local directory: %s', dir_path)
+        if not os.path.isdir(dir_path):
+            logger.error("%s doesn't exist! Exiting.")
+            exit(1)
+
+        # Get file list
+        file_list = []
+        for f in os.listdir(dir_path):
+            fp = os.path.join(dir_path, f)
+            if os.path.isfile(fp):
+                file_list.append(fp)
+
+        # Verify files
+        logger.debug('file_list:\n%s', pformat(file_list, width=40))
+        results = pool.map_async(verify_file, file_list)
+        pprint(results.wait())
+        pprint(results.get())
         exit(1)
 
-    # Get file list
-    file_list = []
-    for f in os.listdir(dir_path):
-        fp = os.path.join(dir_path, f)
-        if os.path.isfile(fp):
-            # file_size = os.path.getsize(fp)
-            # file_list[fp] = {'file_size': file_size,
-            #                  'file_ext': None,
-            #                  'is_corrupted': None,
-            #                  'is_processed': False,
-            #                  'remarks': ''}
-            file_list.append(fp)
+        for r in results.get():
 
-    # Verify files
-    results = pool.map_async(verify_file, file_list)
-    for r in results.get():
+            # for fp in file_list:
 
-        # for fp in file_list:
+            fp_drv, res = r
+            # fp_drv, res = verify_file(fp)
 
-        fp_drv, res = r
-        # fp_drv, res = verify_file(fp)
+            logger.debug('%s: %s', fp_drv, res)
+            if res is not None:
+                # Get file path without drive name
+                fp = os.path.splitdrive(fp_drv)[1][1:]
+                logger.info('Saving: %s', fp)
+                # Add result to db
+                db_res, created = Result.get_or_create(file_server=job.file_server,
+                                                       file_path=fp, defaults=res)
+                logger.debug('%s, %s', db_res, created)
+                # If not created, update result in db
+                if not created:
+                    logger.info('Updating: %s', fp)
+                    for k, v in res.viewitems():
+                        # db_res[k] = v
+                        logger.debug('Execute: %s', 'db_res.' + k + ' = v')
+                        exec('db_res.' + k + ' = v')
+                    db_res.save()
 
-        logger.debug('%s: %s', fp_drv, res)
-        if res is not None:
-            # Get file path without drive name
-            fp = os.path.splitdrive(fp_drv)[1][1:]
-            logger.info('Saving: %s', fp)
-            # Add result to db
-            db_res, created = Result.get_or_create(file_server=job.file_server,
-                                                   file_path=fp, defaults=res)
-            logger.debug('%s, %s', db_res, created)
-            # If not created, update result in db
-            if not created:
-                logger.info('Updating: %s', fp)
-                for k, v in res.viewitems():
-                    # db_res[k] = v
-                    logger.debug('Execute: %s', 'db_res.' + k + ' = v')
-                    exec('db_res.' + k + ' = v')
-                db_res.save()
-
-    # Set done status
-    job.status = 1
-    job.work_expiry = None
-    job.save()
-    logger.info('%s:%s Done!', job.file_server, job.dir_path)
+        # Set done status
+        job.status = 1
+        job.work_expiry = None
+        job.save()
+        logger.info('%s:%s Done!', job.file_server, job.dir_path)
 
 
 def verify_file(file_path_):
@@ -588,10 +552,13 @@ if __name__ == "__main__":
     MYSQL_DB.connect()
     MYSQL_DB.create_tables([Job, Result], True)
 
+    multiprocessing.freeze_support()
+
     # Setup pool
     logger.info('Setting up pool...')
-    pool = multiprocessing.Pool(processes=int(multiprocessing.cpu_count() *
-                                              CPU_USAGE))
+    # pool = multiprocessing.Pool(processes=int(multiprocessing.cpu_count() *
+    #                                           CPU_USAGE))
+    pool = multiprocessing.Pool(1)
 
     if 'update_dir_path' in args:
         logger.info('Update! %s', args.update_dir_path)
