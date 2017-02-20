@@ -247,7 +247,7 @@ def verify_dir(worker_id, job):
         job.status = 0
         job.work_expiry = datetime.now() + timedelta(hours=2)  # set time limit to 2hrs
         job.save()
-        logger.info('[Worker-%s] %s:%s Verifying...', worker_id, job.file_server,
+        logger.info('[Worker-%s] Verifying %s:%s...', worker_id, job.file_server,
                     job.dir_path)
 
     # Get local dir path
@@ -260,6 +260,7 @@ def verify_dir(worker_id, job):
         exit(1)
 
     # Get file list
+    logger.info('[Worker-%s] Getting file list...', worker_id)
     file_list = {}
     for f in os.listdir(dir_path):
         fp = os.path.join(dir_path, f)
@@ -269,10 +270,12 @@ def verify_dir(worker_id, job):
                  pformat(file_list, width=40))
 
     # Verify files
+    logger.info('[Worker-%s] Verifying files...', worker_id)
     for fp in file_list.viewkeys():
         file_list[fp] = verify_file(fp)
 
-    # Add results to db
+    # Save results to db
+    logger.info('[Worker-%s] Saving results to db...', worker_id)
     with MYSQL_DB.atomic() as txn:
         for fp, v in file_list.viewitems():
 
@@ -282,7 +285,7 @@ def verify_dir(worker_id, job):
             if res is not None:
                 # Get file path without drive name
                 fp = os.path.splitdrive(fp_drv)[1][1:]
-                logger.info('[Worker-%s] Saving: %s', worker_id, fp)
+                logger.debug('[Worker-%s] Saving: %s', worker_id, fp)
                 # Add result to db
                 db_res, created = Result.get_or_create(file_server=job.file_server,
                                                        file_path=fp, defaults=res)
@@ -312,7 +315,7 @@ def verify_file(file_path_):
         logger.error("[Worker-%s][%s] doesn't exist! Exiting.", worker_id,
                      file_path)
         return file_path, None
-    logger.debug('[Worker-%s] file_path: %s', worker_id, file_path)
+    logger.info('[Worker-%s] Verifying: %s', worker_id, file_path)
 
     # Get file size
     file_size = os.path.getsize(file_path)
@@ -564,6 +567,7 @@ if __name__ == "__main__":
             logger.info('Mapping network drives...')
             map_network_drives()
 
+            logger.info('Starting %s workers...', WORKERS)
             for worker_id in range(1, WORKERS + 1):
                 logger.info('Starting worker %s...', worker_id)
                 # Start worker thread
