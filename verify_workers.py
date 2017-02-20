@@ -31,14 +31,13 @@ import os
 import subprocess
 import sys
 import time
+import threading
 
 # Logging settings
 logger = logging.getLogger()
 LOG_LEVEL = logging.DEBUG
 CONS_LOG_LEVEL = logging.INFO
 FILE_LOG_LEVEL = logging.DEBUG
-
-
 
 
 def parse_arguments():
@@ -52,7 +51,7 @@ def parse_arguments():
     parser_update.add_argument('update_dir_path')
 
     parser_start = subparsers.add_parser('start')
-    parser_start.add_argument('start_target', choices=['worker'])
+    parser_start.add_argument('start_target', choices=['workers'])
 
     args = parser.parse_args()
     return args
@@ -86,6 +85,11 @@ def setup_logging(args):
 
 @MYSQL_DB.atomic()
 def update(dir_path):
+
+    # Connect to database
+    logger.info('Connecting to database...')
+    MYSQL_DB.connect()
+    MYSQL_DB.create_tables([Job, Result], True)
 
     # Check if directory path exists
     if not os.path.isdir(dir_path):
@@ -135,30 +139,6 @@ def get_file_server(dir_path):
                 # Assuming NFS mount, only get hostname (remove domain)
                 server = server_path.split(':')[0].split('.')[0]
                 return server
-
-
-def start_worker():
-
-    # Check if required binaries exist in path
-    logger.info('Checking binaries...')
-    check_binaries()
-
-    # Check if mapped network drives to the file servers are available
-    logger.info('Mapping network drives...')
-    map_network_drives()
-
-    # Get directory to verify from db
-    while True:
-        try:
-            job = Job.get((Job.status == None) | (
-                (Job.status == 0) & (Job.work_expiry < datetime.now())))
-            logger.info('Found job: %s:%s', job.file_server, job.dir_path)
-            verify_dir(job)
-        except Exception:
-            logger.exception('Error running job!')
-        # Sleep for 5mins
-        logger.info('Sleeping for 5mins...')
-        time.sleep(60 * 5)
 
 
 def check_binaries():
@@ -235,67 +215,94 @@ def map_network_drives():
             exit(1)
 
 
-def verify_dir(job):
+def start_worker(worker_id):
 
-    with MYSQL_DB.atomic() as txn:    
-        # Set working status
-        job.status = 0
-        job.work_expiry = datetime.now() + timedelta(hours=2)  # set time limit to 2hrs
-        job.save()
-        logger.info('%s:%s Verifying...', job.file_server, job.dir_path)
+    # Connect to database
+    logger.info('[Worker-%s] Connecting to database...', worker_id)
+    MYSQL_DB.connect()
+    # MYSQL_DB.create_tables([Job, Result], True)
 
-        # Get local dir path
-        dir_path = os.path.abspath(os.path.join(
-            FILE_SERVERS[job.file_server]['local'], job.dir_path))
-        logger.info('Local directory: %s', dir_path)
-        if not os.path.isdir(dir_path):
-            logger.error("%s doesn't exist! Exiting.")
-            exit(1)
+    # Get directory to verify from db
+    while True:
+        try:
+            job = Job.get((Job.status == None) | (
+                (Job.status == 0) & (Job.work_expiry < datetime.now())))
+            logger.info('[Worker-%s] Found job: %s:%s', worker_id,
+                        job.file_server, job.dir_path)
+            verify_dir(worker_id, job)
+        except Exception:
+            logger.exception('[Worker-%s] Error running job!', worker_id)
+        # Sleep for 5mins
+        logger.info('[Worker-%s] Sleeping for 5mins...', worker_id)
+        time.sleep(60 * 5)
 
-        # Get file list
-        file_list = []
-        for f in os.listdir(dir_path):
-            fp = os.path.join(dir_path, f)
-            if os.path.isfile(fp):
-                file_list.append(fp)
 
-        # Verify files
-        logger.debug('file_list:\n%s', pformat(file_list, width=40))
-        results = pool.map_async(verify_file, file_list)
-        pprint(results.wait())
-        pprint(results.get())
+@MYSQL_DB.atomic()
+def verify_dir(worker_id, job):
+
+    # Set working status
+    job.status = 0
+    job.work_expiry = datetime.now() + timedelta(hours=2)  # set time limit to 2hrs
+    job.save()
+    logger.info('[Worker-%s] %s:%s Verifying...', worker_id, job.file_server,
+                job.dir_path)
+
+    # Get local dir path
+    dir_path = os.path.abspath(os.path.join(
+        FILE_SERVERS[job.file_server]['local'], worker_id, job.dir_path))
+    logger.info('[Worker-%s] Local directory: %s', dir_path)
+    if not os.path.isdir(dir_path):
+        logger.error("[Worker-%s] %s doesn't exist! Exiting.", worker_id,
+                     dir_path)
         exit(1)
 
-        for r in results.get():
+    # Get file list
+    file_list = []
+    for f in os.listdir(dir_path):
+        fp = os.path.join(dir_path, f)
+        if os.path.isfile(fp):
+            file_list.append(fp)
+    logger.debug('[Worker-%s] file_list:\n%s', worker_id,
+                 pformat(file_list, width=40))
 
-            # for fp in file_list:
+    # Verify files
+    # results = pool.map_async(verify_file, file_list)
+    # pprint(results.wait())
+    # pprint(results.get())
+    # exit(1)
 
-            fp_drv, res = r
-            # fp_drv, res = verify_file(fp)
+    # for r in results.get():
 
-            logger.debug('%s: %s', fp_drv, res)
-            if res is not None:
-                # Get file path without drive name
-                fp = os.path.splitdrive(fp_drv)[1][1:]
-                logger.info('Saving: %s', fp)
-                # Add result to db
-                db_res, created = Result.get_or_create(file_server=job.file_server,
-                                                       file_path=fp, defaults=res)
-                logger.debug('%s, %s', db_res, created)
-                # If not created, update result in db
-                if not created:
-                    logger.info('Updating: %s', fp)
-                    for k, v in res.viewitems():
-                        # db_res[k] = v
-                        logger.debug('Execute: %s', 'db_res.' + k + ' = v')
-                        exec('db_res.' + k + ' = v')
-                    db_res.save()
+    for fp in file_list:
 
-        # Set done status
-        job.status = 1
-        job.work_expiry = None
-        job.save()
-        logger.info('%s:%s Done!', job.file_server, job.dir_path)
+        # fp_drv, res = r
+        fp_drv, res = verify_file(fp)
+
+        logger.debug('[Worker-%s][%s] %s', worker_id, fp_drv, res)
+        if res is not None:
+            # Get file path without drive name
+            fp = os.path.splitdrive(fp_drv)[1][1:]
+            logger.info('[Worker-%s] Saving: %s', worker_id, fp)
+            # Add result to db
+            db_res, created = Result.get_or_create(file_server=job.file_server,
+                                                   file_path=fp, defaults=res)
+            logger.debug('%s, %s', db_res, created)
+            # If not created, update result in db
+            if not created:
+                logger.info('[Worker-%s] Updating: %s', worker_id, fp)
+                for k, v in res.viewitems():
+                    # db_res[k] = v
+                    logger.debug('[Worker-%s] Execute: %s', worker_id,
+                                 'db_res.' + k + ' = v')
+                    exec('db_res.' + k + ' = v')
+                db_res.save()
+
+    # Set done status
+    job.status = 1
+    job.work_expiry = None
+    job.save()
+    logger.info('[Worker-%s] %s:%s Done!', worker_id, job.file_server,
+                job.dir_path)
 
 
 def verify_file(file_path_):
@@ -303,20 +310,23 @@ def verify_file(file_path_):
     # Check if file exists
     file_path = os.path.abspath(file_path_)
     if not os.path.isfile(file_path):
-        logger.error("%s doesn't exist! Exiting.", file_path)
+        logger.error("[Worker-%s][%s] doesn't exist! Exiting.", worker_id,
+                     file_path)
         return file_path, None
-    logger.debug('file_path: %s', file_path)
+    logger.debug('[Worker-%s] file_path: %s', worker_id, file_path)
 
     # Get file size
     file_size = os.path.getsize(file_path)
-    logger.debug('%s: file_size: %s', file_path, file_size)
+    logger.debug('[Worker-%s][%s] file_size: %s', worker_id, file_path,
+                 file_size)
 
     # Check file extension
     file_ext = os.path.splitext(file_path)[1].lower()
-    logger.debug('%s: file_ext: %s', file_path, file_ext)
+    logger.debug('[Worker-%s][%s] file_ext: %s', worker_id, file_path,
+                 file_ext)
 
     # Get checksums and last modified time
-    checksum, last_modified = get_checksums(file_path)
+    checksum, last_modified = get_checksums(worker_id, file_path)
 
     is_processed = True
     is_corrupted = None
@@ -331,8 +341,8 @@ def verify_file(file_path_):
         is_corrupted = verify_archive(file_path)
     else:
         is_processed = False
-    logger.debug('%s: is_processed: %s is_corrupted: %s remarks: %s',
-                 file_path, is_processed, is_corrupted, remarks)
+    logger.debug('[Worker-%s][%s] is_processed: %s is_corrupted: %s \
+remarks: %s', worker_id, file_path, is_processed, is_corrupted, remarks)
 
     result = {
         'file_ext': file_ext,
@@ -347,17 +357,18 @@ def verify_file(file_path_):
     return file_path, result
 
 
-def get_checksums(file_path):
+def get_checksums((worker_id, file_path):
 
-    dir_path, file_name = os.path.split(file_path)
+    dir_path, file_name=os.path.split(file_path)
     # logger.debug('%s: file_name: %s', file_path, repr(file_name))
 
     # Check if SHA1SUMS file already exists
-    checksum = None
-    sha1sum_filepath = os.path.join(dir_path, 'SHA1SUMS')
+    checksum=None
+    sha1sum_filepath=os.path.join(dir_path, 'SHA1SUMS')
     if os.path.isfile(sha1sum_filepath):
         # Read files from SHA1SUM file that already have checksums
-        logger.debug('%s: Reading checksum...', file_path)
+        # logger.debug('[Worker-%s][%s] Reading checksum...', worker_id,
+        #     file_path)
         with open(sha1sum_filepath, 'r') as open_file:
             for line in open_file:
                 tokens = line.strip().split()
@@ -370,25 +381,30 @@ def get_checksums(file_path):
                     checksum = tokens[0]
     if not checksum:
         # Compute checksum
-        logger.debug('%s: Computing checksum...', file_path)
+        # logger.debug('[Worker-%s][%s] Computing checksum...', worker_id,
+        #     file_path)
         shasum = subprocess.check_output(['sha1sum', file_path])
         tokens = shasum.strip().split()
         checksum = tokens[0]
-    logger.debug('%s: checksum: %s', file_path, checksum)
+    # logger.debug('[Worker-%s][%s] checksum: %s', worker_id, file_path,
+    #     checksum)
 
     # Check if LAST_MODIFIED file already exists
     last_modified = None
     last_modified_filepath = os.path.join(dir_path, 'LAST_MODIFIED')
     if os.path.isfile(last_modified_filepath):
-        logger.debug('%s: Reading last modified time...', file_path)
+        # logger.debug('[Worker-%s][%s] Reading last modified time...',
+        #     worker_id, file_path)
         last_modified_all = json.load(open(last_modified_filepath, 'r'))
         if file_name in last_modified_all:
             last_modified = last_modified_all[file_name]
     if not last_modified:
         # Get last modified time
-        logger.debug('%s: Getting last modified time...', file_path)
+        # logger.debug('[Worker-%s][%s] Getting last modified time...',
+        #     worker_id, file_path)
         last_modified = os.stat(file_path).st_mtime
-    logger.debug('%s: last_modified: %s', file_path, last_modified)
+    # logger.debug('[Worker-%s][%s] last_modified: %s',
+    #         worker_id, file_path, last_modified)
 
     return checksum, last_modified
 
@@ -402,9 +418,9 @@ def verify_raster(file_path):
         proc = subprocess.Popen(
             ['gdalinfo', '-checksum', file_path], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT)
-        out, err = proc.communicate()
-        returncode = proc.returncode
-        output = {'out': str(out).lower(),
+        out, err=proc.communicate()
+        returncode=proc.returncode
+        output={'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
@@ -434,9 +450,9 @@ def verify_vector(file_path):
         proc = subprocess.Popen(
             ['ogrinfo', '-al', file_path], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT)
-        out, err = proc.communicate()
-        returncode = proc.returncode
-        output = {'out': str(out).lower(),
+        out, err=proc.communicate()
+        returncode=proc.returncode
+        output={'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
@@ -471,9 +487,9 @@ def verify_las(file_path):
         proc = subprocess.Popen(
             ['lasinfo', file_path], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT)
-        out, err = proc.communicate()
-        returncode = proc.returncode
-        output = {'out': str(out).lower(),
+        out, err=proc.communicate()
+        returncode=proc.returncode
+        output={'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
@@ -519,9 +535,9 @@ def verify_archive(file_path):
         proc = subprocess.Popen(
             ['7za', 't', file_path], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT)
-        out, err = proc.communicate()
-        returncode = proc.returncode
-        output = {'out': str(out).lower(),
+        out, err=proc.communicate()
+        returncode=proc.returncode
+        output={'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True)
@@ -547,27 +563,38 @@ if __name__ == "__main__":
     setup_logging(args)
     logger.debug('args: %s', args)
 
-    # Connect to database
-    logger.info('Connecting to database...')
-    MYSQL_DB.connect()
-    MYSQL_DB.create_tables([Job, Result], True)
-
-    multiprocessing.freeze_support()
+    # multiprocessing.freeze_support()
 
     # Setup pool
-    logger.info('Setting up pool...')
+    # logger.info('Setting up pool...')
     # pool = multiprocessing.Pool(processes=int(multiprocessing.cpu_count() *
     #                                           CPU_USAGE))
-    pool = multiprocessing.Pool(1)
+    # pool = multiprocessing.Pool(1)
 
     if 'update_dir_path' in args:
         logger.info('Update! %s', args.update_dir_path)
         update(args.update_dir_path)
+
     elif 'start_target' in args:
-        if args.start_target == 'worker':
-            logger.info('Starting worker...')
-            start_worker()
+        if args.start_target == 'workers':
+
+            # Check if required binaries exist in path
+            logger.info('Checking binaries...')
+            check_binaries()
+
+            # Check if mapped network drives to the file servers are available
+            logger.info('Mapping network drives...')
+            map_network_drives()
+
+            # for worker_id in range(1,
+            #                        int(multiprocessing.cpu_count() * CPU_USAGE)
+            #                        + 1):
+            for worker_id in range(1, 2):
+                logger.info('Starting worker %s...', worker_id)
+                # start_worker(worker_id)
+                # Start worker thread
+                threading.Thread(start_worker, args=(worker_id,)).start()
 
     # Close pool
-    pool.close()
-    pool.join()
+    # pool.close()
+    # pool.join()
