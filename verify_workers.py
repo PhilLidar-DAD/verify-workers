@@ -83,13 +83,13 @@ def setup_logging(args):
     logger.addHandler(fh)
 
 
-@MYSQL_DB.atomic()
 def update(dir_path):
 
     # Connect to database
     logger.info('Connecting to database...')
     MYSQL_DB.connect()
-    MYSQL_DB.create_tables([Job, Result], True)
+    with MYSQL_DB.atomic() as txn:
+        MYSQL_DB.create_tables([Job, Result], True)
 
     # Check if directory path exists
     if not os.path.isdir(dir_path):
@@ -120,8 +120,9 @@ def update(dir_path):
             logger.info('%s', dp)
 
             # Add dir path as job
-            job, created = Job.get_or_create(dir_path=dp,
-                                             file_server=file_server)
+            with MYSQL_DB.atomic() as txn:
+                job, created = Job.get_or_create(dir_path=dp,
+                                                 file_server=file_server)
 
 
 def get_file_server(dir_path):
