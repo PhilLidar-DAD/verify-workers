@@ -247,8 +247,8 @@ def verify_dir(worker_id, job):
         job.status = 0
         job.work_expiry = datetime.now() + timedelta(hours=2)  # set time limit to 2hrs
         job.save()
-        logger.info('[Worker-%s] Verifying %s:%s...', worker_id, job.file_server,
-                    job.dir_path)
+        # logger.info('[Worker-%s] Verifying %s:%s...', worker_id, job.file_server,
+        #             job.dir_path)
 
     # Get local dir path
     dir_path = os.path.abspath(os.path.join(
