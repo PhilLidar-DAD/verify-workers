@@ -237,9 +237,10 @@ def start_worker(worker_id):
             verify_dir(worker_id, job)
         except Exception:
             logger.exception('[Worker-%s] Error running job!', worker_id)
-        # Sleep for 5mins
-        logger.info('[Worker-%s] Sleeping for 1min...', worker_id)
-        time.sleep(60)
+        # Sleep
+        delay = WORKERS * 5 + 10
+        logger.info('[Worker-%s] Sleeping for %ssecs...', worker_id, delay)
+        time.sleep(delay)
 
 
 def verify_dir(worker_id, job):
