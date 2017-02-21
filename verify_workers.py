@@ -420,7 +420,7 @@ def verify_raster(file_path):
         output = {'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
-                  sort_keys=True)
+                  sort_keys=True, ensure_ascii=False)
 
     # Determine if file is corrupted from output
     if output['returncode'] != 0:
@@ -458,7 +458,7 @@ def verify_vector(file_path):
         output = {'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
-                  sort_keys=True)
+                  sort_keys=True, ensure_ascii=False)
 
     # Determine if file is corrupted from output
     if output['returncode'] != 0:
@@ -501,7 +501,7 @@ def verify_las(file_path):
         output = {'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
-                  sort_keys=True)
+                  sort_keys=True, ensure_ascii=False)
 
     # Determine if file is corrupted from output
     if output['returncode'] != 0:
@@ -555,7 +555,7 @@ def verify_archive(file_path):
         output = {'out': str(out).lower(),
                   'returncode': returncode}
         json.dump(output, open(outfile, 'w'), indent=4,
-                  sort_keys=True)
+                  sort_keys=True, ensure_ascii=False)
 
     # Load output from json file
     output = json.load(open(outfile, 'r'))
