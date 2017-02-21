@@ -1,8 +1,11 @@
+from playhouse.pool import PooledMySQLDatabase
 from settings import *
 import peewee
 
 # Define database models
-MYSQL_DB = peewee.MySQLDatabase(
+# MYSQL_DB = peewee.MySQLDatabase(
+#     DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
+MYSQL_DB = PooledMySQLDatabase(
     DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
 
 
