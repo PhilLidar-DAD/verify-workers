@@ -19,6 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
 from datetime import datetime, timedelta
+from logging.handlers import RotatingFileHandler
 from models import *
 from pprint import pprint, pformat
 from settings import *
@@ -77,7 +78,8 @@ def setup_logging(args):
 
     # Setup file logging
     LOG_FILE = os.path.splitext(__file__)[0] + '.log'
-    fh = logging.FileHandler(LOG_FILE, mode='w')
+    fh = logging.RotatingFileHandler(LOG_FILE,  mode='a', maxBytes=5*1024*1024, 
+                                 backupCount=5, encoding=None, delay=0)
     fh.setLevel(FILE_LOG_LEVEL)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
@@ -245,7 +247,7 @@ def verify_dir(worker_id, job):
     with MYSQL_DB.atomic() as txn:
         # Set working status
         job.status = 0
-        job.work_expiry = datetime.now() + timedelta(hours=2)  # set time limit to 2hrs
+        job.work_expiry = datetime.now() + timedelta(hours=1)  # set time limit to 1hr
         job.save()
         # logger.info('[Worker-%s] Verifying %s:%s...', worker_id, job.file_server,
         #             job.dir_path)
@@ -257,7 +259,7 @@ def verify_dir(worker_id, job):
     if not os.path.isdir(dir_path):
         logger.error("[Worker-%s] %s doesn't exist! Exiting.", worker_id,
                      dir_path)
-        exit(1)
+        return
 
     # Get file list
     logger.info('[Worker-%s] Getting file list...', worker_id)
