@@ -219,8 +219,8 @@ def map_network_drives():
 
 def start_worker(worker_id):
 
-    # Delay start by (worker id)*5 seconds
-    delay = worker_id * 5
+    # Delay start
+    delay = random.randint((worker_id - 1) * 5 + 1, worker_id * 5)
     logger.info('[Worker-%s] Delay start for %ssecs...', worker_id, delay)
     time.sleep(delay)
 
@@ -239,7 +239,7 @@ def start_worker(worker_id):
         except Exception:
             logger.exception('[Worker-%s] Error running job!', worker_id)
         # Sleep
-        delay = WORKERS * 5 + 10
+        delay = random.randint(1, 5)
         logger.info('[Worker-%s] Sleeping for %ssecs...', worker_id, delay)
         time.sleep(delay)
 
