@@ -1,4 +1,5 @@
 from playhouse.pool import PooledMySQLDatabase
+from playhouse.migrate import MySQLMigrator, migrate
 from settings import *
 import peewee
 
@@ -31,9 +32,11 @@ class Result(BaseModel):
     file_server = peewee.CharField()
     file_path = peewee.CharField()
     file_ext = peewee.CharField()
+    file_type = peewee.CharField(null=True)
     file_size = peewee.BigIntegerField()
     is_processed = peewee.BooleanField()
-    is_corrupted = peewee.BooleanField(null=True)
+    # is_corrupted = peewee.BooleanField(null=True) -> has_error
+    has_error = peewee.BooleanField(null=True)
     remarks = peewee.CharField(null=True)
     checksum = peewee.CharField()
     last_modified = peewee.BigIntegerField()
@@ -41,3 +44,13 @@ class Result(BaseModel):
 
     class Meta:
         primary_key = peewee.CompositeKey('file_server', 'file_path')
+
+
+def migrate01():
+    MYSQL_DB.connect()
+    migrator = MySQLMigrator(MYSQL_DB)
+    with MYSQL_DB.atomic() as txn:
+        migrate(
+            migrator.add_column('result', 'file_type', Result.file_type),
+            migrator.rename_column('result', 'is_corrupted', 'has_error')
+        )

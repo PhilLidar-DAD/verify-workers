@@ -33,6 +33,7 @@ import subprocess
 import sys
 import threading
 import time
+import re
 
 # Logging settings
 logger = logging.getLogger()
@@ -218,8 +219,8 @@ def map_network_drives():
 
 def start_worker(worker_id):
 
-    # Delay start by (worker id)*5 seconds
-    delay = worker_id * 5
+    # Delay start
+    delay = random.randint((worker_id - 1) * 5 + 1, worker_id * 5)
     logger.info('[Worker-%s] Delay start for %ssecs...', worker_id, delay)
     time.sleep(delay)
 
@@ -238,7 +239,7 @@ def start_worker(worker_id):
         except Exception:
             logger.exception('[Worker-%s] Error running job!', worker_id)
         # Sleep
-        delay = WORKERS * 5 + 10
+        delay = random.randint(1, 5)
         logger.info('[Worker-%s] Sleeping for %ssecs...', worker_id, delay)
         time.sleep(delay)
 
@@ -333,27 +334,33 @@ def verify_file(worker_id, file_path_):
     # Get checksums and last modified time
     checksum, last_modified = get_checksums(worker_id, file_path)
 
+    file_type = None
     is_processed = True
-    is_corrupted = None
+    has_error = None
     remarks = ''
     if file_ext in RASTERS:
-        is_corrupted, remarks = verify_raster(file_path)
+        file_type = 'RASTER'
+        has_error, remarks = verify_raster(file_path)
     elif file_ext in VECTORS:
-        is_corrupted = verify_vector(file_path)
+        file_type = 'VECTOR'
+        has_error, remarks = verify_vector(file_path)
     elif file_ext in LAS:
-        is_corrupted = verify_las(file_path)
+        file_type = 'LAS/LAZ'
+        has_error, remarks = verify_las(file_path)
     elif file_ext in ARCHIVES:
-        is_corrupted = verify_archive(file_path)
+        file_type = 'ARCHIVE'
+        has_error, remarks = verify_archive(file_path)
     else:
         is_processed = False
-    logger.debug('[Worker-%s][%s] is_processed: %s is_corrupted: %s \
-remarks: %s', worker_id, file_path, is_processed, is_corrupted, remarks)
+    logger.debug('[Worker-%s][%s] is_processed: %s has_error: %s \
+remarks: %s', worker_id, file_path, is_processed, has_error, remarks)
 
     result = {
         'file_ext': file_ext,
+        'file_type': file_type,
         'file_size': file_size,
         'is_processed': is_processed,
-        'is_corrupted': is_corrupted,
+        'has_error': has_error,
         'remarks': remarks,
         'checksum': checksum,
         'last_modified': last_modified
@@ -426,17 +433,27 @@ def verify_raster(file_path):
                   sort_keys=True, ensure_ascii=False)
 
     # Determine if file is corrupted from output
+    remarks_buf = []
+    has_error = False
+
     if output['returncode'] != 0:
-        if 'failed to open grid statistics file' in output['out']:
-            return None, 'ERROR! Failed to open grid statistics file (see \
-gdalinfo -checksum {raster_path} output)'
-        else:
-            return True, ''
+        has_error = True
+        remarks_buf.append('Error while opening file')
 
-    if 'error' in output['out']:
-        return True, ''
+    for l in output['out'].split('\n'):
+        line = l.strip()
+        if 'failed to open grid statistics file' in line:
+            has_error = None
+            remarks_buf.append('Failed to open grid statistics file')
+            # Ignore other error lines if they appear
+            break
+        if 'error' in line:
+            has_error = True
+            remarks_buf.append(line)
 
-    return False, ''
+    remarks = '\n'.join(remarks_buf)
+
+    return has_error, remarks
 
 
 def verify_vector(file_path):
@@ -464,13 +481,19 @@ def verify_vector(file_path):
                   sort_keys=True, ensure_ascii=False)
 
     # Determine if file is corrupted from output
+    remarks_buf = []
+    has_error = False
+
     if output['returncode'] != 0:
-        return True
+        has_error = True
+        remarks_buf.append('Error while opening file')
 
     if 'ogrfeature' not in output['out']:
-        return True
+        has_error = True
+        remarks_buf.append('ogrfeature not found')
 
     find_geom = False
+    found_geom = False
     for l in output['out'].split('\n'):
         line = l.strip()
         if 'ogrfeature' in line:
@@ -478,8 +501,16 @@ def verify_vector(file_path):
         if find_geom:
             for g in GEOMS:
                 if g in line:
-                    return False
-    return True
+                    found_geom = True
+                    break
+
+    if not found_geom:
+        has_error = True
+        remarks_buf.append('Cannot find geom')
+
+    remarks = '\n'.join(remarks_buf)
+
+    return has_error, remarks
 
 
 def verify_las(file_path):
@@ -507,33 +538,58 @@ def verify_las(file_path):
                   sort_keys=True, ensure_ascii=False)
 
     # Determine if file is corrupted from output
-    if output['returncode'] != 0:
-        return True
+    remarks_buf = []
+    has_error = False
 
-    if 'error' in output['out']:
-        return True
+    if output['returncode'] != 0:
+        has_error = True
+        remarks_buf.append('Error while opening file')
+
+    # if 'error' in output['out']:
+    #     return True
 
     # Ignore these warning messages
-    ignored = ['points outside of header bounding box',
-               'range violates gps week time specified by global encoding bit 0']
+    ignored = [r'points outside of header bounding box',
+               r'range violates gps week time specified by global encoding bit 0',
+               r'for return [0-9]+ real number of points by return \([0-9]+\) is different from header entry \([0-9]+\)']
     # Parse output for warning messages
     for l in output['out'].split('\n'):
         line = l.strip()
-        # Ignore some lines
-        ignore_line = False
-        for i in ignored:
-            if i in line:
-                ignore_line = True
-                break
-        if ignore_line:
-            continue
 
-        if 'warning' in line:
-            return True
+        # # Ignore some lines
+        # ignore_line = False
+        # for i in ignored:
+        #     if i in line:
+        #         ignore_line = True
+        #         break
+        # if ignore_line:
+        #     continue
+
+        # if 'warning' in line:
+        #     return True
+
         # if 'never classified' in line:
         #     return True
 
-    return False
+        if 'error' in line:
+            has_error = True
+            remarks_buf.append(line)
+
+        if 'warning' in line:
+            remarks_buf.append(line)
+
+            # Check if warning is ignored
+            ignore_line = False
+            for i in ignored:
+                if re.search(i, line):
+                    ignore_line = True
+                    break
+            if not ignore_line:
+                has_error = True
+
+    remarks = '\n'.join(remarks_buf)
+
+    return has_error, remarks
 
 
 def verify_archive(file_path):
@@ -563,13 +619,22 @@ def verify_archive(file_path):
     # Load output from json file
     output = json.load(open(outfile, 'r'))
     # Determine if file is corrupted from output
+    remarks_buf = []
+    has_error = False
+
     if output['returncode'] != 0:
-        return True
+        has_error = True
+        remarks_buf.append('Error while opening file')
 
-    if 'error' in output['out']:
-        return True
+    for l in output['out'].split('\n'):
+        line = l.strip()
+        if 'error' in line:
+            has_error = True
+            remarks_buf.append(line)
 
-    return False
+    remarks = '\n'.join(remarks_buf)
+
+    return has_error, remarks
 
 
 if __name__ == "__main__":
