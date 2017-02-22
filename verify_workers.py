@@ -288,8 +288,10 @@ def verify_dir(worker_id, job):
             logger.debug('[Worker-%s][%s] %s', worker_id, fp_drv, res)
             if res is not None:
                 # Get file path without drive name
-                fp = os.path.splitdrive(fp_drv)[1][1:]
-                logger.debug('[Worker-%s] Saving: %s', worker_id, fp)
+                drive, tail = os.path.splitdrive(fp_drv)
+                logger.debug('[Worker-%s] %s, %s', worker_id, drive, tail)
+                fp = tail[1:]
+                logger.debug('[Worker-%s] fp: %s', worker_id, fp)
                 # Add result to db
                 db_res, created = Result.get_or_create(file_server=job.file_server,
                                                        file_path=fp, defaults=res)
@@ -298,8 +300,8 @@ def verify_dir(worker_id, job):
                 if not created:
                     for k, v in res.viewitems():
                         # db_res[k] = v
-                        logger.debug('[Worker-%s] Execute: %s', worker_id,
-                                     'db_res.' + k + ' = v')
+                        # logger.debug('[Worker-%s] Execute: %s', worker_id,
+                        #              'db_res.' + k + ' = v')
                         exec('db_res.' + k + ' = v')
                     db_res.save()
 
