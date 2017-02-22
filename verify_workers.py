@@ -19,6 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
 from datetime import datetime, timedelta
+from logging.handlers import RotatingFileHandler
 from models import *
 from pprint import pprint, pformat
 from settings import *
@@ -78,7 +79,8 @@ def setup_logging(args):
 
     # Setup file logging
     LOG_FILE = os.path.splitext(__file__)[0] + '.log'
-    fh = logging.FileHandler(LOG_FILE, mode='w')
+    fh = RotatingFileHandler(LOG_FILE,  mode='a', maxBytes=5 * 1024 * 1024,
+                             backupCount=5, encoding=None, delay=0)
     fh.setLevel(FILE_LOG_LEVEL)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
