@@ -7,7 +7,7 @@ import peewee
 # MYSQL_DB = peewee.MySQLDatabase(
 #     DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
 MYSQL_DB = PooledMySQLDatabase(
-    DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
+    DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST, charset='latin1')
 
 
 class BaseModel(peewee.Model):
@@ -30,15 +30,12 @@ class Job(BaseModel):
 
 class Result(BaseModel):
     file_server = peewee.CharField()
-    file_path_old = peewee.CharField()
-    file_path = peewee.TextField(default='')
+    file_path = peewee.CharField(max_length=512)
     file_ext = peewee.CharField()
     file_type = peewee.CharField(null=True)
     file_size = peewee.BigIntegerField()
     is_processed = peewee.BooleanField()
-    # is_corrupted = peewee.BooleanField(null=True) -> has_error
     has_error = peewee.BooleanField(null=True)
-    remarks_old = peewee.CharField(null=True)
     remarks = peewee.TextField(null=True)
     checksum = peewee.CharField()
     last_modified = peewee.BigIntegerField()
@@ -59,25 +56,11 @@ def migrate01():
         )
 
 
-def migrate02():
+def create_tables():
     MYSQL_DB.connect()
-    migrator = MySQLMigrator(MYSQL_DB)
-    with MYSQL_DB.atomic() as txn:
-        print 'Rename old columns and add new ones...'
-        migrate(
-            migrator.rename_column('result', 'file_path', 'file_path_old'),
-            migrator.rename_column('result', 'remarks', 'remarks_old'),
-            migrator.add_column('result', 'file_path', Result.file_path),
-            migrator.add_column('result', 'remarks', Result.remarks),
-            migrator.add_column('result', 'processor', Result.processor),
-        )
-        print 'Move data to new columns...'
-        for r in Result.select():
-            r.file_path = r.file_path_old
-            r.remarks = r.remarks_old
-            r.save()
-        print 'Delete..'
-        migrate(
-            migrator.drop_column('result', 'file_path_old'),
-            migrator.drop_column('result', 'remarks_old'),
-        )
+    with MYSQL_DB.transaction():
+        MYSQL_DB.create_tables([Job, Result], True)
+
+
+if __name__ == "__main__":
+    create_tables()
