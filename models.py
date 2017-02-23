@@ -63,7 +63,7 @@ def migrate02():
     MYSQL_DB.connect()
     migrator = MySQLMigrator(MYSQL_DB)
     with MYSQL_DB.atomic() as txn:
-        # Rename old columns and add new ones
+        print 'Rename old columns and add new ones...'
         migrate(
             migrator.rename_column('result', 'file_path', 'file_path_old'),
             migrator.rename_column('result', 'remarks', 'remarks_old'),
@@ -71,12 +71,12 @@ def migrate02():
             migrator.add_column('result', 'remarks', Result.remarks),
             migrator.add_column('result', 'processor', Result.processor),
         )
-        # Move data to new columns
+        print 'Move data to new columns...'
         for r in Result.select():
             r.file_path = r.file_path_old
             r.remarks = r.remarks_old
             r.save()
-        # Delete
+        print 'Delete..'
         migrate(
             migrator.drop_column('result', 'file_path_old'),
             migrator.drop_column('result', 'remarks_old'),
