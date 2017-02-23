@@ -29,11 +29,12 @@ import json
 import logging
 import os
 import random
+import re
+import socket
 import subprocess
 import sys
 import threading
 import time
-import re
 
 # Logging settings
 logger = logging.getLogger()
@@ -79,7 +80,7 @@ def setup_logging(args):
 
     # Setup file logging
     LOG_FILE = os.path.splitext(__file__)[0] + '.log'
-    fh = RotatingFileHandler(LOG_FILE,  maxBytes=100 * 5 *
+    fh = RotatingFileHandler(LOG_FILE,  maxBytes=10 * 5 *
                              1024 * 1024, backupCount=5)
     fh.setLevel(FILE_LOG_LEVEL)
     fh.setFormatter(formatter)
@@ -91,8 +92,8 @@ def update(dir_path):
     # Connect to database
     logger.info('Connecting to database...')
     MYSQL_DB.connect()
-    with MYSQL_DB.atomic() as txn:
-        MYSQL_DB.create_tables([Job, Result], True)
+    # with MYSQL_DB.atomic() as txn:
+    #     MYSQL_DB.create_tables([Job, Result], True)
 
     # Check if directory path exists
     if not os.path.isdir(dir_path):
@@ -365,7 +366,8 @@ remarks: %s', worker_id, file_path, is_processed, has_error, remarks)
         'has_error': has_error,
         'remarks': remarks,
         'checksum': checksum,
-        'last_modified': last_modified
+        'last_modified': last_modified,
+        'processor': processor
     }
 
     return file_path, result
@@ -419,6 +421,10 @@ def verify_raster(file_path):
         try:
             # Load output from json file
             output = json.load(open(outfile, 'r'))
+
+            # Reverify if dll wasn't loaded last time
+            if "can't load requested dll" in output['out']:
+                output = None
         except Exception:
             pass
 
@@ -431,6 +437,10 @@ def verify_raster(file_path):
         returncode = proc.returncode
         output = {'out': str(out).lower(),
                   'returncode': returncode}
+        if "can't load requested dll" in output['out']:
+            logger.error('Error loading requested dll! Exiting.')
+            logger.error('out:\n%s', pformat(out))
+            exit(1)
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True, ensure_ascii=False)
 
@@ -467,6 +477,10 @@ def verify_vector(file_path):
         try:
             # Load output from json file
             output = json.load(open(outfile, 'r'))
+
+            # Reverify if dll wasn't loaded last time
+            if "can't load requested dll" in output['out']:
+                output = None
         except Exception:
             pass
 
@@ -479,6 +493,10 @@ def verify_vector(file_path):
         returncode = proc.returncode
         output = {'out': str(out).lower(),
                   'returncode': returncode}
+        if "can't load requested dll" in output['out']:
+            logger.error('Error loading requested dll! Exiting.')
+            logger.error('out:\n%s', pformat(out))
+            exit(1)
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True, ensure_ascii=False)
 
@@ -524,6 +542,10 @@ def verify_las(file_path):
         try:
             # Load output from json file
             output = json.load(open(outfile, 'r'))
+
+            # Reverify if dll wasn't loaded last time
+            if "can't load requested dll" in output['out']:
+                output = None
         except Exception:
             pass
 
@@ -536,6 +558,10 @@ def verify_las(file_path):
         returncode = proc.returncode
         output = {'out': str(out).lower(),
                   'returncode': returncode}
+        if "can't load requested dll" in output['out']:
+            logger.error('Error loading requested dll! Exiting.')
+            logger.error('out:\n%s', pformat(out))
+            exit(1)
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True, ensure_ascii=False)
 
@@ -547,9 +573,6 @@ def verify_las(file_path):
         has_error = True
         remarks_buf.append('Error while opening file')
 
-    # if 'error' in output['out']:
-    #     return True
-
     # Ignore these warning messages
     ignored = [r'points outside of header bounding box',
                r'range violates gps week time specified by global encoding bit 0',
@@ -557,21 +580,6 @@ def verify_las(file_path):
     # Parse output for warning messages
     for l in output['out'].split('\n'):
         line = l.strip()
-
-        # # Ignore some lines
-        # ignore_line = False
-        # for i in ignored:
-        #     if i in line:
-        #         ignore_line = True
-        #         break
-        # if ignore_line:
-        #     continue
-
-        # if 'warning' in line:
-        #     return True
-
-        # if 'never classified' in line:
-        #     return True
 
         if 'error' in line:
             has_error = True
@@ -603,6 +611,10 @@ def verify_archive(file_path):
         try:
             # Load output from json file
             output = json.load(open(outfile, 'r'))
+
+            # Reverify if dll wasn't loaded last time
+            if "can't load requested dll" in output['out']:
+                output = None
         except Exception:
             pass
 
@@ -615,6 +627,10 @@ def verify_archive(file_path):
         returncode = proc.returncode
         output = {'out': str(out).lower(),
                   'returncode': returncode}
+        if "can't load requested dll" in output['out']:
+            logger.error('Error loading requested dll! Exiting.')
+            logger.error('out:\n%s', pformat(out))
+            exit(1)
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True, ensure_ascii=False)
 
@@ -647,6 +663,10 @@ if __name__ == "__main__":
     # Setup logging
     setup_logging(args)
     logger.debug('args: %s', args)
+
+    # Get hostname
+    processor = socket.gethostname()
+    logger.info('Processor: %s', processor)
 
     if 'update_dir_path' in args:
         logger.info('Update! %s', args.update_dir_path)

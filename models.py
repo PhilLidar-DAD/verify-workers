@@ -7,7 +7,7 @@ import peewee
 # MYSQL_DB = peewee.MySQLDatabase(
 #     DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
 MYSQL_DB = PooledMySQLDatabase(
-    DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
+    DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST, charset='latin1')
 
 
 class BaseModel(peewee.Model):
@@ -30,17 +30,17 @@ class Job(BaseModel):
 
 class Result(BaseModel):
     file_server = peewee.CharField()
-    file_path = peewee.CharField()
+    file_path = peewee.CharField(max_length=512)
     file_ext = peewee.CharField()
     file_type = peewee.CharField(null=True)
     file_size = peewee.BigIntegerField()
     is_processed = peewee.BooleanField()
-    # is_corrupted = peewee.BooleanField(null=True) -> has_error
     has_error = peewee.BooleanField(null=True)
-    remarks = peewee.CharField(null=True)
+    remarks = peewee.TextField(null=True)
     checksum = peewee.CharField()
     last_modified = peewee.BigIntegerField()
     uploaded = peewee.DateTimeField(null=True)
+    processor = peewee.CharField(null=True)
 
     class Meta:
         primary_key = peewee.CompositeKey('file_server', 'file_path')
@@ -54,3 +54,13 @@ def migrate01():
             migrator.add_column('result', 'file_type', Result.file_type),
             migrator.rename_column('result', 'is_corrupted', 'has_error')
         )
+
+
+def create_tables():
+    MYSQL_DB.connect()
+    with MYSQL_DB.transaction():
+        MYSQL_DB.create_tables([Job, Result], True)
+
+
+if __name__ == "__main__":
+    create_tables()
