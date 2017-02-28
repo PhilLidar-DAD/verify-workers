@@ -6,8 +6,8 @@ import peewee
 # Define database models
 # MYSQL_DB = peewee.MySQLDatabase(
 #     DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST)
-MYSQL_DB = PooledMySQLDatabase(
-    DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST, charset='latin1')
+MYSQL_DB = PooledMySQLDatabase(DB_NAME, user=DB_USER, password=DB_PASS,
+                               host=DB_HOST, charset='latin1')
 
 
 class BaseModel(peewee.Model):
