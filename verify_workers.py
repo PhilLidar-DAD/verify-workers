@@ -27,6 +27,7 @@ import distutils
 import json
 import logging
 import os
+import peewee
 import random
 import re
 import socket
@@ -245,8 +246,15 @@ def start_worker(worker_id):
     while True:
         try:
             MYSQL_DB.connect()
-            job = Job.get((Job.status == None) | (
-                (Job.status == 0) & (Job.work_expiry < datetime.now())))
+            # job = Job.get((Job.status == None) | (
+            #     (Job.status == 0) & (Job.work_expiry < datetime.now())))
+            job = (Job
+                   .select()
+                   .where((Job.status == None) |
+                          ((Job.status == 0) &
+                           (Job.work_expiry < datetime.now())))
+                   .order_by(peewee.fn.Rand())
+                   .get())
             logger.info('[Worker-%s] Found job: %s:%s', worker_id,
                         job.file_server, job.dir_path)
             verify_dir(worker_id, job)
