@@ -107,6 +107,8 @@ def update(dir_path):
     # prefix
     path_tokens = dir_path.split(os.sep)
     dp_prefix = os.sep.join(path_tokens[3:])
+    if dp_prefix[-1] == os.sep:
+        dp_prefix = dp_prefix[:-1]
     logger.info('dp_prefix: %s', dp_prefix)
     with MYSQL_DB.atomic() as txn:
         query = (Job
