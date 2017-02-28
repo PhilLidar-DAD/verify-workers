@@ -23,6 +23,7 @@ class Job(BaseModel):
                                           (1, 'Done')],
                                  null=True)
     work_expiry = peewee.DateTimeField(null=True)
+    is_dir = peewee.BooleanField(null=True)
 
     class Meta:
         primary_key = peewee.CompositeKey('file_server', 'dir_path')
@@ -56,6 +57,15 @@ def migrate01():
         )
 
 
+def migrate02():
+    MYSQL_DB.connect()
+    migrator = MySQLMigrator(MYSQL_DB)
+    with MYSQL_DB.atomic() as txn:
+        migrate(
+            migrator.add_column('job', 'is_dir', Job.is_dir),
+        )
+
+
 def create_tables():
     MYSQL_DB.connect()
     with MYSQL_DB.transaction():
@@ -63,4 +73,4 @@ def create_tables():
 
 
 if __name__ == "__main__":
-    create_tables()
+    migrate02()

@@ -27,6 +27,7 @@ import distutils
 import json
 import logging
 import os
+import peewee
 import random
 import re
 import socket
@@ -102,6 +103,11 @@ def update(dir_path):
     file_server = get_file_server(args.update_dir_path)
     logger.info('file_server: %s', file_server)
 
+    # Temporarily set is_dir to False for all dirs in db
+    with MYSQL_DB.atomic() as txn:
+        query = Job.update(is_dir=False)
+        query.execute()
+
     # Traverse directories
     for root, dirs, files in os.walk(dir_path):
 
@@ -123,8 +129,18 @@ def update(dir_path):
 
             # Add dir path as job
             with MYSQL_DB.atomic() as txn:
-                job, created = Job.get_or_create(dir_path=dp,
-                                                 file_server=file_server)
+                job, created = Job.get_or_create(file_server=file_server,
+                                                 dir_path=dp,
+                                                 defaults={'is_dir': True})
+                # If not created, update result in db
+                if not created:
+                    job.is_dir = True
+                    job.save()
+
+    # Delete all dirs that don't exist anymore
+    with MYSQL_DB.atomic() as txn:
+        query = Job.delete().where(Job.is_dir == False)
+        query.execute()
 
 
 def get_file_server(dir_path):
@@ -230,8 +246,15 @@ def start_worker(worker_id):
     while True:
         try:
             MYSQL_DB.connect()
-            job = Job.get((Job.status == None) | (
-                (Job.status == 0) & (Job.work_expiry < datetime.now())))
+            # job = Job.get((Job.status == None) | (
+            #     (Job.status == 0) & (Job.work_expiry < datetime.now())))
+            job = (Job
+                   .select()
+                   .where((Job.status == None) |
+                          ((Job.status == 0) &
+                           (Job.work_expiry < datetime.now())))
+                   .order_by(peewee.fn.Rand())
+                   .get())
             logger.info('[Worker-%s] Found job: %s:%s', worker_id,
                         job.file_server, job.dir_path)
             verify_dir(worker_id, job)
