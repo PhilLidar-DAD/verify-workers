@@ -235,10 +235,11 @@ def start_worker(worker_id):
             logger.info('[Worker-%s] Found job: %s:%s', worker_id,
                         job.file_server, job.dir_path)
             verify_dir(worker_id, job)
-            if not MYSQL_DB.is_closed():
-                MYSQL_DB.close()
         except Exception:
             logger.exception('[Worker-%s] Error running job!', worker_id)
+        finally:
+            if not MYSQL_DB.is_closed():
+                MYSQL_DB.close()
         # Sleep
         delay = random.randint(1, 5)
         logger.info('[Worker-%s] Sleeping for %ssecs...', worker_id, delay)
