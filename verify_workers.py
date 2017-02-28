@@ -224,17 +224,19 @@ def start_worker(worker_id):
     time.sleep(delay)
 
     # Connect to database
-    logger.info('[Worker-%s] Connecting to database...', worker_id)
-    MYSQL_DB.connect()
+    # logger.info('[Worker-%s] Connecting to database...', worker_id)
 
     # Get directory to verify from db
     while True:
         try:
+            MYSQL_DB.connect()
             job = Job.get((Job.status == None) | (
                 (Job.status == 0) & (Job.work_expiry < datetime.now())))
             logger.info('[Worker-%s] Found job: %s:%s', worker_id,
                         job.file_server, job.dir_path)
             verify_dir(worker_id, job)
+            if not MYSQL_DB.is_closed():
+                MYSQL_DB.close()
         except Exception:
             logger.exception('[Worker-%s] Error running job!', worker_id)
         # Sleep
@@ -293,7 +295,8 @@ def verify_dir(worker_id, job):
                 logger.debug('[Worker-%s] fp: %s', worker_id, fp)
                 # Add result to db
                 db_res, created = Result.get_or_create(file_server=job.file_server,
-                                                       file_path=fp, defaults=res)
+                                                       file_path=fp,
+                                                       defaults=res)
                 logger.debug('%s, %s', db_res, created)
                 # If not created, update result in db
                 if not created:
