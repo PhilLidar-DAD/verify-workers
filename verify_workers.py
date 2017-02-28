@@ -103,9 +103,15 @@ def update(dir_path):
     file_server = get_file_server(args.update_dir_path)
     logger.info('file_server: %s', file_server)
 
-    # Temporarily set is_dir to False for all dirs in db
+    # Temporarily set is_dir to False for all dirs in db that starts with
+    # prefix
+    path_tokens = dir_path.split(os.sep)
+    dp_prefix = os.sep.join(path_tokens[3:])
+    logger.info('dp_prefix: %s', dp_prefix)
     with MYSQL_DB.atomic() as txn:
-        query = Job.update(is_dir=False)
+        query = (Job
+                 .update(is_dir=False)
+                 .where(Job.dir_path.startswith(dp_prefix)))
         query.execute()
 
     # Traverse directories
@@ -139,7 +145,10 @@ def update(dir_path):
 
     # Delete all dirs that don't exist anymore
     with MYSQL_DB.atomic() as txn:
-        query = Job.delete().where(Job.is_dir == False)
+        query = (Job
+                 .delete()
+                 .where((Job.is_dir == False) &
+                        (Job.dir_path.startswith(dp_prefix))))
         query.execute()
 
 
