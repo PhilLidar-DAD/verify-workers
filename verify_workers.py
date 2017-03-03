@@ -19,7 +19,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
 from datetime import datetime, timedelta
-from models import *
+from google_sheet import GoogleSheet
+from models import MYSQL_DB, Job, Result
 from pprint import pprint, pformat
 from settings import *
 import argparse
@@ -41,6 +42,7 @@ logger = logging.getLogger()
 LOG_LEVEL = logging.DEBUG
 CONS_LOG_LEVEL = logging.INFO
 FILE_LOG_LEVEL = logging.DEBUG
+START_EPOCH = datetime(1970, 1, 1)
 
 
 def parse_arguments():
@@ -55,6 +57,9 @@ def parse_arguments():
 
     parser_start = subparsers.add_parser('start')
     parser_start.add_argument('start_target', choices=['workers'])
+
+    parser_upload = subparsers.add_parser('upload')
+    parser_upload.add_argument('upload_target', choices=['results', 'reset'])
 
     args = parser.parse_args()
     return args
@@ -103,9 +108,17 @@ def update(dir_path):
     file_server = get_file_server(args.update_dir_path)
     logger.info('file_server: %s', file_server)
 
-    # Temporarily set is_dir to False for all dirs in db
+    # Temporarily set is_dir to False for all dirs in db that starts with
+    # prefix
+    path_tokens = dir_path.split(os.sep)
+    dp_prefix = os.sep.join(path_tokens[3:])
+    if dp_prefix[-1] == os.sep:
+        dp_prefix = dp_prefix[:-1]
+    logger.info('dp_prefix: %s', dp_prefix)
     with MYSQL_DB.atomic() as txn:
-        query = Job.update(is_dir=False)
+        query = (Job
+                 .update(is_dir=False)
+                 .where(Job.dir_path.startswith(dp_prefix)))
         query.execute()
 
     # Traverse directories
@@ -139,7 +152,10 @@ def update(dir_path):
 
     # Delete all dirs that don't exist anymore
     with MYSQL_DB.atomic() as txn:
-        query = Job.delete().where(Job.is_dir == False)
+        query = (Job
+                 .delete()
+                 .where((Job.is_dir == False) &
+                        (Job.dir_path.startswith(dp_prefix))))
         query.execute()
 
 
@@ -680,6 +696,154 @@ def verify_archive(file_path):
     return has_error, remarks
 
 
+def simplify_backslashes(p):
+    while r'\\' in p:
+        p = p.replace(r'\\', '\\')
+    return p
+
+
+def upload_results(spreadsheetId, rangeName, has_error_only=True):
+
+    # Get current values table
+    logger.info('Getting current values from Google Sheet...')
+    gs = GoogleSheet(spreadsheetId)
+    values = gs.get_values(rangeName)
+
+    # Convert values table to dict
+    logger.info('Converting values to dict...')
+    values_dict = {}
+    headers = True
+    for row in values:
+
+        # Ignore headers
+        if headers:
+            headers = False
+            continue
+
+        file_server = row[0]  # A
+        file_path = simplify_backslashes(row[1])  # B
+        file_ext = row[2]  # C
+        file_type = row[3]  # D
+        file_size = row[4]  # E
+        is_processed = row[5]  # F
+        has_error = row[6]  # G
+        remarks = row[7]  # H
+        checksum = row[9]  # J
+        last_modified = row[10]  # K
+        uploaded = row[11]  # L
+        processor = row[12]  # M
+
+        values_dict[(file_server, file_path)] = {
+            'file_ext': file_ext,
+            'file_type': file_type,
+            'file_size': file_size,
+            'is_processed': is_processed,
+            'has_error': has_error,
+            'remarks': remarks,
+            'checksum': checksum,
+            'last_modified': last_modified,
+            'uploaded': uploaded,
+            'processor': processor,
+        }
+
+    # Get all results
+    logger.info('Getting all results from db and updating dict...')
+    MYSQL_DB.connect()
+    q = Result.select().where(Result.uploaded == None)
+    if has_error_only:
+        q = Result.select().where((Result.uploaded == None) &
+                                  (Result.has_error == True))
+
+    has_new_results = False
+    with MYSQL_DB.atomic() as txn:
+        for r in q:
+            has_new_results = True
+
+            k = (r.file_server, r.file_path)
+
+            if k in values_dict:
+                r.uploaded = datetime(2017, 2, 24)
+            else:
+                r.uploaded = datetime.now()
+                values_dict[k] = {}
+
+            values_dict[k]['file_ext'] = r.file_ext
+            values_dict[k]['file_type'] = r.file_type
+            values_dict[k]['file_size'] = r.file_size
+            values_dict[k]['is_processed'] = r.is_processed
+            values_dict[k]['has_error'] = r.has_error
+            # Limit remarks to 1000 chars
+            remarks = r.remarks
+            if len(remarks) >= 1000:
+                remarks = remarks[:997] + '...'
+            values_dict[k]['remarks'] = remarks
+            values_dict[k]['checksum'] = r.checksum
+            values_dict[k]['last_modified'] = datetime.fromtimestamp(
+                r.last_modified).strftime('%Y-%m-%d %H:%M:%S')
+            values_dict[k]['processor'] = r.processor
+
+            values_dict[k]['uploaded'] = r.uploaded.strftime('%b %d, %Y')
+
+            r.save()
+
+    if not has_new_results:
+        logger.info('No new results! Exiting.')
+        return
+
+    # Create new values list
+    logger.info('Creating new values list...')
+    values = []
+    headers = ['file_server',
+               'file_path',
+               'file_ext',
+               'file_type',
+               'file_size',
+               'is_processed',
+               'has_error',
+               'remarks',
+               'remarks',
+               'checksum',
+               'last_modified',
+               'processor',
+               'uploaded']
+    values.append(headers)
+    for k in sorted(values_dict.keys()):
+
+        row = []
+
+        file_server, file_path = k
+        row.append(file_server)
+        row.append(file_path)
+
+        row.append(values_dict[k]['file_ext'])
+        row.append(values_dict[k]['file_type'])
+        row.append(values_dict[k]['file_size'])
+        row.append(values_dict[k]['is_processed'])
+        row.append(values_dict[k]['has_error'])
+        row.append(values_dict[k]['remarks'])
+        row.append('')
+        row.append(values_dict[k]['checksum'])
+        row.append(values_dict[k]['last_modified'])
+        row.append(values_dict[k]['processor'])
+        row.append(values_dict[k]['uploaded'])
+
+        values.append(row)
+
+    # Update Google Sheeet
+    logger.info('Updating Google Sheet...')
+    gs.set_values(rangeName, values)
+
+    logger.info('Done!')
+
+
+def upload_reset():
+    logger.info('Connecting to database...')
+    MYSQL_DB.connect()
+    with MYSQL_DB.atomic() as txn:
+        query = Result.update(uploaded=None)
+        query.execute()
+        logger.info('Done!')
+
 if __name__ == "__main__":
 
     # Parge arguments
@@ -690,31 +854,43 @@ if __name__ == "__main__":
     logger.debug('args: %s', args)
 
     # Get hostname
-    processor = socket.gethostname()
+    processor = socket.gethostname().lower()
     logger.info('Processor: %s', processor)
 
     if 'update_dir_path' in args:
         logger.info('Update! %s', args.update_dir_path)
         update(args.update_dir_path)
 
-    elif 'start_target' in args:
-        if args.start_target == 'workers':
+    elif 'start_target' in args and args.start_target == 'workers':
 
-            # Check if required binaries exist in path
-            logger.info('Checking binaries...')
-            check_binaries()
+        # Check if required binaries exist in path
+        logger.info('Checking binaries...')
+        check_binaries()
 
-            # Check if mapped network drives to the file servers are available
-            logger.info('Mapping network drives...')
-            map_network_drives()
+        # Check if mapped network drives to the file servers are available
+        logger.info('Mapping network drives...')
+        map_network_drives()
 
-            logger.info('Starting %s workers...', WORKERS)
-            for worker_id in range(1, WORKERS + 1):
-                logger.info('Starting worker %s...', worker_id)
-                try:
-                    # Start worker thread
-                    threading.Thread(target=start_worker,
-                                     args=(worker_id,)).start()
-                except Exception:
-                    logger.exception('[Worker-%s] Error running worker!',
-                                     worker_id)
+        logger.info('Starting %s workers...', WORKERS)
+        for worker_id in range(1, WORKERS + 1):
+            logger.info('Starting worker %s...', worker_id)
+            try:
+                # Start worker thread
+                threading.Thread(target=start_worker,
+                                 args=(worker_id,)).start()
+            except Exception:
+                logger.exception('[Worker-%s] Error running worker!',
+                                 worker_id)
+
+    elif 'upload_target' in args:
+
+        if args.upload_target == 'results':
+
+            logger.info('Uploading results...')
+            upload_results('1j2nNxHfqEFnDC_qFu00ncCM7139gR5OxWMcs5ylXDMQ',
+                           'Corrupted list!A:M')
+
+        elif args.upload_target == 'reset':
+
+            logger.info('Resetting upload status...')
+            upload_reset()
