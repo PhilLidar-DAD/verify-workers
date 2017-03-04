@@ -62,7 +62,7 @@ class GoogleSheet:
         values = result.get('values', [])
         return values
 
-    def set_values(self, rangeName, values):
+    def update_values(self, rangeName, values):
         body = {
             'values': values
         }
@@ -70,6 +70,13 @@ class GoogleSheet:
             spreadsheetId=self._spreadsheetId, range=rangeName,
             valueInputOption='USER_ENTERED', body=body).execute()
 
+    def batch_update(self, requests):
+        body = {
+            'requests': requests
+        }
+        response = (self._service.spreadsheets()
+                    .batchUpdate(spreadsheetId=self._spreadsheetId,
+                                 body=body).execute())
 
 if __name__ == '__main__':
     # gs = GoogleSheet('1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms')
@@ -77,4 +84,4 @@ if __name__ == '__main__':
 
     gs = GoogleSheet('1j2nNxHfqEFnDC_qFu00ncCM7139gR5OxWMcs5ylXDMQ')
     # pprint(gs.get_values('Corrupted list (testing)!A:M'))
-    gs.set_values('Corrupted list (testing)!A:M', [['']])
+    gs.update_values('Corrupted list (testing)!A:M', [['']])
