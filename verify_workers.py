@@ -702,11 +702,10 @@ def simplify_backslashes(p):
     return p
 
 
-def upload_results(spreadsheetId, rangeName, has_error_only=True):
+def upload_results(gs, rangeName, has_error_only=True):
 
     # Get current values table
     logger.info('Getting current values from Google Sheet...')
-    gs = GoogleSheet(spreadsheetId)
     values = gs.get_values(rangeName)
 
     # Convert values table to dict
@@ -788,7 +787,7 @@ def upload_results(spreadsheetId, rangeName, has_error_only=True):
 
     if not has_new_results:
         logger.info('No new results! Exiting.')
-        return
+        return False
 
     # Create new values list
     logger.info('Creating new values list...')
@@ -831,9 +830,11 @@ def upload_results(spreadsheetId, rangeName, has_error_only=True):
 
     # Update Google Sheeet
     logger.info('Updating Google Sheet...')
-    gs.set_values(rangeName, values)
+    gs.update_values(rangeName, values)
 
     logger.info('Done!')
+
+    return True
 
 
 def upload_reset():
@@ -843,6 +844,27 @@ def upload_reset():
         query = Result.update(uploaded=None)
         query.execute()
         logger.info('Done!')
+
+
+def upload_summary(gs, update_title=True):
+
+    # Update title
+    if update_title:
+        logging.info('Updating Google Sheet title...')
+        title = ('Corrupted list (' + datetime.now().strftime('%b %d, %Y') +
+                 ')')
+        # title = ('Corrupted list (' + datetime.now().strftime('%b %d, %Y') +
+        #          ') [testing]')
+        requests = [{
+            'updateSpreadsheetProperties': {
+                'properties': {
+                    'title': title
+                },
+                'fields': 'title'
+            }
+        }]
+        gs.batch_update(requests)
+
 
 if __name__ == "__main__":
 
@@ -887,8 +909,15 @@ if __name__ == "__main__":
         if args.upload_target == 'results':
 
             logger.info('Uploading results...')
-            upload_results('1j2nNxHfqEFnDC_qFu00ncCM7139gR5OxWMcs5ylXDMQ',
-                           'Corrupted list!A:M')
+
+            # Prod
+            gs = GoogleSheet('1j2nNxHfqEFnDC_qFu00ncCM7139gR5OxWMcs5ylXDMQ')
+
+            # Testing
+            # gs = GoogleSheet('1_Hr9qJBP3i8wzFdH3ibUuWUJTd7OqZthsrHh7Q9GDGI')
+
+            update_title = upload_results(gs, 'Corrupted list!A:M')
+            upload_summary(gs, update_title)
 
         elif args.upload_target == 'reset':
 
