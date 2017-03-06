@@ -19,5 +19,9 @@ set GDAL_DATA=
 set GDAL_DRIVER_PATH=
 
 echo.
+echo Reinstalling requirements...
+pip install -r requirements.txt
+
+echo.
 echo Starting verify workers...
 %USERPROFILE%\Envs\verify-workers\Scripts\python.exe -u verify_workers.py %*
