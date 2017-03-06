@@ -18,6 +18,7 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
+from __future__ import division
 from datetime import datetime, timedelta
 from google_sheet import GoogleSheet
 from models import MYSQL_DB, Job, Result
@@ -42,7 +43,6 @@ logger = logging.getLogger()
 LOG_LEVEL = logging.DEBUG
 CONS_LOG_LEVEL = logging.INFO
 FILE_LOG_LEVEL = logging.DEBUG
-START_EPOCH = datetime(1970, 1, 1)
 
 
 def parse_arguments():
@@ -60,6 +60,9 @@ def parse_arguments():
 
     parser_upload = subparsers.add_parser('upload')
     parser_upload.add_argument('upload_target', choices=['results', 'reset'])
+
+    parser_extras = subparsers.add_parser('extras')
+    parser_extras.add_argument('extras_target', choices=['fixpathsep'])
 
     args = parser.parse_args()
     return args
@@ -331,7 +334,7 @@ def verify_dir(worker_id, job):
                 # Get file path without drive name
                 drive, tail = os.path.splitdrive(fp_drv)
                 logger.debug('[Worker-%s] %s, %s', worker_id, drive, tail)
-                fp = tail[1:]
+                fp = tail[1:].replace(os.sep, os.altsep)
                 logger.debug('[Worker-%s] fp: %s', worker_id, fp)
                 # Add result to db
                 db_res, created = Result.get_or_create(file_server=job.file_server,
@@ -702,9 +705,25 @@ def simplify_backslashes(p):
     return p
 
 
-def upload_results(gs, rangeName, has_error_only=True):
+def upload_results():
+
+    for dp_prefix, spreadsheetId in SHEETS.viewitems():
+        if dp_prefix == 'Summary':
+            pass
+        else:
+            update_sheet(dp_prefix, spreadsheetId)
+        # break
+
+
+def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
+
+    logger.info('Updating %s sheet...', dp_prefix)
+
+    # Create GoogleSheet object
+    gs = GoogleSheet(spreadsheetId)
 
     # Get current values table
+    rangeName = 'Sheet1!A:G'
     logger.info('Getting current values from Google Sheet...')
     values = gs.get_values(rangeName)
 
@@ -720,70 +739,57 @@ def upload_results(gs, rangeName, has_error_only=True):
             continue
 
         file_server = row[0]  # A
-        file_path = simplify_backslashes(row[1])  # B
+        file_path = row[1]  # B
         file_ext = row[2]  # C
         file_type = row[3]  # D
-        file_size = row[4]  # E
-        is_processed = row[5]  # F
-        has_error = row[6]  # G
-        remarks = row[7]  # H
-        checksum = row[9]  # J
-        last_modified = row[10]  # K
-        uploaded = row[11]  # L
-        processor = row[12]  # M
+        remarks = row[4]  # E
+        last_modified = row[5]  # F
+        uploaded = row[6]  # G
 
         values_dict[(file_server, file_path)] = {
             'file_ext': file_ext,
             'file_type': file_type,
-            'file_size': file_size,
-            'is_processed': is_processed,
-            'has_error': has_error,
             'remarks': remarks,
-            'checksum': checksum,
             'last_modified': last_modified,
             'uploaded': uploaded,
-            'processor': processor,
         }
 
     # Get all results
     logger.info('Getting all results from db and updating dict...')
     MYSQL_DB.connect()
-    q = Result.select().where(Result.uploaded == None)
+    q = Result.select().where(Result.file_path.startswith(dp_prefix))
     if has_error_only:
-        q = Result.select().where((Result.uploaded == None) &
+        q = Result.select().where((Result.file_path.startswith(dp_prefix)) &
                                   (Result.has_error == True))
 
     has_new_results = False
     with MYSQL_DB.atomic() as txn:
         for r in q:
-            has_new_results = True
 
             k = (r.file_server, r.file_path)
 
-            if k in values_dict:
-                r.uploaded = datetime(2017, 2, 24)
-            else:
+            if r.uploaded is None:
                 r.uploaded = datetime.now()
-                values_dict[k] = {}
+                r.save()
 
-            values_dict[k]['file_ext'] = r.file_ext
-            values_dict[k]['file_type'] = r.file_type
-            values_dict[k]['file_size'] = r.file_size
-            values_dict[k]['is_processed'] = r.is_processed
-            values_dict[k]['has_error'] = r.has_error
-            # Limit remarks to 1000 chars
-            remarks = r.remarks
-            if len(remarks) >= 1000:
-                remarks = remarks[:997] + '...'
-            values_dict[k]['remarks'] = remarks
-            values_dict[k]['checksum'] = r.checksum
-            values_dict[k]['last_modified'] = datetime.fromtimestamp(
-                r.last_modified).strftime('%Y-%m-%d %H:%M:%S')
-            values_dict[k]['processor'] = r.processor
+            if k not in values_dict:
 
-            values_dict[k]['uploaded'] = r.uploaded.strftime('%b %d, %Y')
+                # Limit remarks to 1000 chars
+                remarks = r.remarks
+                if len(remarks) >= 1000:
+                    remarks = remarks[:997] + '...'
 
-            r.save()
+                values_dict[k] = {
+                    'file_ext': r.file_ext,
+                    'file_type': r.file_type,
+                    'remarks': remarks,
+                    'last_modified': (datetime.fromtimestamp(r.last_modified)
+                                      .strftime('%Y-%m-%d %H:%M:%S')),
+                    'uploaded': r.uploaded.strftime('%b %d, %Y'),
+                    # 'uploaded': r.uploaded.strftime('%Y-%m-%d %H:%M:%S'),
+                }
+
+                has_new_results = True
 
     if not has_new_results:
         logger.info('No new results! Exiting.')
@@ -796,14 +802,8 @@ def upload_results(gs, rangeName, has_error_only=True):
                'file_path',
                'file_ext',
                'file_type',
-               'file_size',
-               'is_processed',
-               'has_error',
                'remarks',
-               'remarks',
-               'checksum',
                'last_modified',
-               'processor',
                'uploaded']
     values.append(headers)
     for k in sorted(values_dict.keys()):
@@ -816,14 +816,8 @@ def upload_results(gs, rangeName, has_error_only=True):
 
         row.append(values_dict[k]['file_ext'])
         row.append(values_dict[k]['file_type'])
-        row.append(values_dict[k]['file_size'])
-        row.append(values_dict[k]['is_processed'])
-        row.append(values_dict[k]['has_error'])
         row.append(values_dict[k]['remarks'])
-        row.append('')
-        row.append(values_dict[k]['checksum'])
         row.append(values_dict[k]['last_modified'])
-        row.append(values_dict[k]['processor'])
         row.append(values_dict[k]['uploaded'])
 
         values.append(row)
@@ -831,6 +825,19 @@ def upload_results(gs, rangeName, has_error_only=True):
     # Update Google Sheeet
     logger.info('Updating Google Sheet...')
     gs.update_values(rangeName, values)
+
+    logging.info('Updating Google Sheet title...')
+    title = (dp_prefix + ' corrupted list (' +
+             datetime.now().strftime('%b %d, %Y') + ')')
+    requests = [{
+        'updateSpreadsheetProperties': {
+            'properties': {
+                'title': title
+            },
+            'fields': 'title'
+        }
+    }]
+    gs.batch_update(requests)
 
     logger.info('Done!')
 
@@ -847,24 +854,36 @@ def upload_reset():
 
 
 def upload_summary(gs, update_title=True):
+    pass
 
-    # Update title
-    if update_title:
-        logging.info('Updating Google Sheet title...')
-        title = ('Corrupted list (' + datetime.now().strftime('%b %d, %Y') +
-                 ')')
-        # title = ('Corrupted list (' + datetime.now().strftime('%b %d, %Y') +
-        #          ') [testing]')
-        requests = [{
-            'updateSpreadsheetProperties': {
-                'properties': {
-                    'title': title
-                },
-                'fields': 'title'
-            }
-        }]
-        gs.batch_update(requests)
 
+def fixpathsep():
+    logger.info('Connecting to database...')
+    MYSQL_DB.connect()
+    with MYSQL_DB.atomic() as txn:
+
+        q = Result.select().where(Result.file_path.contains('\\\\'))
+
+        results_count = q.count()
+        logger.info('Updating %s records...', results_count)
+
+        counter = 0
+        start_time = datetime.now()
+        for r in q:
+            r.file_path = r.file_path.replace('\\', '/')
+            r.save()
+
+            counter += 1
+            if counter % 1000 == 0:
+                duration = datetime.now() - start_time
+                total_duration = (duration.total_seconds() * results_count /
+                                  counter)
+                logger.info('%s... ETA: %s',
+                            counter, ((start_time +
+                                       timedelta(seconds=total_duration))
+                                      .strftime('%Y-%m-%d %H:%M:%S')))
+
+        logger.info('Done!')
 
 if __name__ == "__main__":
 
@@ -883,43 +902,44 @@ if __name__ == "__main__":
         logger.info('Update! %s', args.update_dir_path)
         update(args.update_dir_path)
 
-    elif 'start_target' in args and args.start_target == 'workers':
+    elif 'start_target' in args:
 
-        # Check if required binaries exist in path
-        logger.info('Checking binaries...')
-        check_binaries()
+        if args.start_target == 'workers':
 
-        # Check if mapped network drives to the file servers are available
-        logger.info('Mapping network drives...')
-        map_network_drives()
+            # Check if required binaries exist in path
+            logger.info('Checking binaries...')
+            check_binaries()
 
-        logger.info('Starting %s workers...', WORKERS)
-        for worker_id in range(1, WORKERS + 1):
-            logger.info('Starting worker %s...', worker_id)
-            try:
-                # Start worker thread
-                threading.Thread(target=start_worker,
-                                 args=(worker_id,)).start()
-            except Exception:
-                logger.exception('[Worker-%s] Error running worker!',
-                                 worker_id)
+            # Check if mapped network drives to the file servers are available
+            logger.info('Mapping network drives...')
+            map_network_drives()
+
+            logger.info('Starting %s workers...', WORKERS)
+            for worker_id in range(1, WORKERS + 1):
+                logger.info('Starting worker %s...', worker_id)
+                try:
+                    # Start worker thread
+                    threading.Thread(target=start_worker,
+                                     args=(worker_id,)).start()
+                except Exception:
+                    logger.exception('[Worker-%s] Error running worker!',
+                                     worker_id)
 
     elif 'upload_target' in args:
 
         if args.upload_target == 'results':
 
             logger.info('Uploading results...')
-
-            # Prod
-            gs = GoogleSheet('1j2nNxHfqEFnDC_qFu00ncCM7139gR5OxWMcs5ylXDMQ')
-
-            # Testing
-            # gs = GoogleSheet('1_Hr9qJBP3i8wzFdH3ibUuWUJTd7OqZthsrHh7Q9GDGI')
-
-            update_title = upload_results(gs, 'Corrupted list!A:M')
-            upload_summary(gs, update_title)
+            upload_results()
 
         elif args.upload_target == 'reset':
 
             logger.info('Resetting upload status...')
             upload_reset()
+
+    elif 'extras_target' in args:
+
+        if args.extras_target == 'fixpathsep':
+
+            logger.info('Fixing path separator in db...')
+            fixpathsep()
