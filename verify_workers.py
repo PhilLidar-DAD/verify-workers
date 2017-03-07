@@ -59,7 +59,7 @@ def parse_arguments():
     parser_start.add_argument('start_target', choices=['workers'])
 
     parser_upload = subparsers.add_parser('upload')
-    parser_upload.add_argument('upload_target', choices=['results', 'reset'])
+    parser_upload.add_argument('upload_target', choices=['results'])
 
     parser_extras = subparsers.add_parser('extras')
     parser_extras.add_argument('extras_target', choices=['fixpathsep'])
@@ -99,8 +99,6 @@ def update(dir_path):
     # Connect to database
     logger.info('Connecting to database...')
     MYSQL_DB.connect()
-    # with MYSQL_DB.atomic() as txn:
-    #     MYSQL_DB.create_tables([Job, Result], True)
 
     # Check if directory path exists
     if not os.path.isdir(dir_path):
@@ -258,15 +256,10 @@ def start_worker(worker_id):
     logger.info('[Worker-%s] Delay start for %ssecs...', worker_id, delay)
     time.sleep(delay)
 
-    # Connect to database
-    # logger.info('[Worker-%s] Connecting to database...', worker_id)
-
     # Get directory to verify from db
     while True:
         try:
             MYSQL_DB.connect()
-            # job = Job.get((Job.status == None) | (
-            #     (Job.status == 0) & (Job.work_expiry < datetime.now())))
             job = (Job
                    .select()
                    .where((Job.status == None) |
@@ -295,8 +288,6 @@ def verify_dir(worker_id, job):
         job.status = 0
         job.work_expiry = datetime.now() + timedelta(hours=1)  # set time limit to 1hr
         job.save()
-        # logger.info('[Worker-%s] Verifying %s:%s...', worker_id, job.file_server,
-        #             job.dir_path)
 
     # Get local dir path
     dir_path = os.path.abspath(os.path.join(
@@ -344,9 +335,6 @@ def verify_dir(worker_id, job):
                 # If not created, update result in db
                 if not created:
                     for k, v in res.viewitems():
-                        # db_res[k] = v
-                        # logger.debug('[Worker-%s] Execute: %s', worker_id,
-                        #              'db_res.' + k + ' = v')
                         exec('db_res.' + k + ' = v')
                     db_res.save()
 
@@ -699,20 +687,13 @@ def verify_archive(file_path):
     return has_error, remarks
 
 
-def simplify_backslashes(p):
-    while r'\\' in p:
-        p = p.replace(r'\\', '\\')
-    return p
-
-
 def upload_results():
 
-    for dp_prefix, spreadsheetId in SHEETS.viewitems():
+    for dp_prefix, spreadsheetId in sorted(SHEETS.viewitems()):
         if dp_prefix == 'Summary':
-            pass
+            update_summary(spreadsheetId)
         else:
             update_sheet(dp_prefix, spreadsheetId)
-        # break
 
 
 def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
@@ -786,7 +767,6 @@ def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
                     'last_modified': (datetime.fromtimestamp(r.last_modified)
                                       .strftime('%Y-%m-%d %H:%M:%S')),
                     'uploaded': r.uploaded.strftime('%b %d, %Y'),
-                    # 'uploaded': r.uploaded.strftime('%Y-%m-%d %H:%M:%S'),
                 }
 
                 has_new_results = True
@@ -844,46 +824,110 @@ def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     return True
 
 
-def upload_reset():
-    logger.info('Connecting to database...')
-    MYSQL_DB.connect()
-    with MYSQL_DB.atomic() as txn:
-        query = Result.update(uploaded=None)
-        query.execute()
-        logger.info('Done!')
+def update_summary(spreadsheetId):
 
+    # Get summary values from db
+    logger.info('Getting summary values from db...')
+    values = []
+    headers = ['',
+               'Processed dirs',
+               'Total dirs',
+               'Percentage done',
+               'No. of files with error',
+               'Total no. of files',
+               'Percentage of files with error by file count',
+               'Total size of files with error (TB)',
+               'Total file size (TB)',
+               'Percentage of files with error by file size']
+    values.append(headers)
 
-def upload_summary(gs, update_title=True):
-    pass
+    for dp_prefix in sorted(SHEETS.viewkeys()):
 
+        if dp_prefix == 'Summary':
+            # Skip
+            continue
 
-def fixpathsep():
-    logger.info('Connecting to database...')
-    MYSQL_DB.connect()
-    with MYSQL_DB.atomic() as txn:
+        # Add directory prefix
+        row = []
+        logger.info('Processing %s...', dp_prefix)
+        row.append(dp_prefix)
 
-        q = Result.select().where(Result.file_path.contains('\\\\'))
+        # Add processed status
+        proc_dirs = (Job
+                     .select()
+                     .where((Job.dir_path.startswith(dp_prefix)) &
+                            (Job.status == True))
+                     .count())
+        logger.debug('proc_dirs: %s', proc_dirs)
+        row.append(proc_dirs)
 
-        results_count = q.count()
-        logger.info('Updating %s records...', results_count)
+        totl_dirs = (Job
+                     .select()
+                     .where(Job.dir_path.startswith(dp_prefix))
+                     .count())
+        logger.debug('totl_dirs: %s', totl_dirs)
+        row.append(totl_dirs)
 
-        counter = 0
-        start_time = datetime.now()
-        for r in q:
-            r.file_path = r.file_path.replace('\\', '/')
-            r.save()
+        pct_dirs = '%.2f' % (proc_dirs / totl_dirs * 100)
+        logger.debug('pct_dirs: %s', pct_dirs)
+        row.append(pct_dirs)
 
-            counter += 1
-            if counter % 1000 == 0:
-                duration = datetime.now() - start_time
-                total_duration = (duration.total_seconds() * results_count /
-                                  counter)
-                logger.info('%s... ETA: %s',
-                            counter, ((start_time +
-                                       timedelta(seconds=total_duration))
-                                      .strftime('%Y-%m-%d %H:%M:%S')))
+        # Add error by file count
+        err_files = (Result
+                     .select()
+                     .where((Result.file_path.startswith(dp_prefix)) &
+                            (Result.has_error == True))
+                     .count())
+        logger.debug('err_files: %s', err_files)
+        row.append(err_files)
 
-        logger.info('Done!')
+        totl_files = (Result
+                      .select()
+                      .where(Result.file_path.startswith(dp_prefix))
+                      .count())
+        logger.debug('totl_files: %s', totl_files)
+        row.append(totl_files)
+
+        pct_files = '%.2f' % (err_files / totl_files * 100)
+        logger.debug('pct_files: %s', pct_files)
+        row.append(pct_files)
+
+        # Add error by file size
+        err_size = (Result
+                    .select(peewee.fn.SUM(Result.file_size))
+                    .where((Result.file_path.startswith(dp_prefix)) &
+                           (Result.has_error == True))
+                    .scalar())
+        logger.debug('err_size: %s', err_size)
+        row.append('%.2f' % (err_size / (1024 ** 4)))
+
+        totl_size = (Result
+                     .select(peewee.fn.SUM(Result.file_size))
+                     .where(Result.file_path.startswith(dp_prefix))
+                     .scalar())
+        logger.debug('totl_size: %s', totl_size)
+        row.append('%.2f' % (totl_size / (1024 ** 4)))
+
+        pct_size = '%.2f' % (err_size / totl_size * 100)
+        logger.debug('pct_size: %s', pct_size)
+        row.append(pct_size)
+
+        values.append(row)
+
+    values.append(['' for _ in range(10)])
+    values.append(['as of ' + (datetime
+                               .now()
+                               .strftime('%b %d, %Y %H:%M:%S'))] +
+                  ['' for _ in range(9)])
+
+    # Update Google Sheeet
+    logger.info('Updating Google Sheet...')
+    gs = GoogleSheet(spreadsheetId)
+    rangeName = 'Sheet2!A:J'
+    gs.update_values(rangeName, values)
+
+    logger.info('Done!')
+
 
 if __name__ == "__main__":
 
@@ -931,15 +975,3 @@ if __name__ == "__main__":
 
             logger.info('Uploading results...')
             upload_results()
-
-        elif args.upload_target == 'reset':
-
-            logger.info('Resetting upload status...')
-            upload_reset()
-
-    elif 'extras_target' in args:
-
-        if args.extras_target == 'fixpathsep':
-
-            logger.info('Fixing path separator in db...')
-            fixpathsep()
