@@ -689,7 +689,7 @@ def verify_archive(file_path):
 
 def upload_results():
 
-    for dp_prefix, spreadsheetId in SHEETS.viewitems():
+    for dp_prefix, spreadsheetId in sorted(SHEETS.viewitems()):
         if dp_prefix == 'Summary':
             update_summary(spreadsheetId)
         else:
@@ -841,7 +841,7 @@ def update_summary(spreadsheetId):
                'Percentage of files with error by file size']
     values.append(headers)
 
-    for dp_prefix in SHEETS.viewkeys():
+    for dp_prefix in sorted(SHEETS.viewkeys()):
 
         if dp_prefix == 'Summary':
             # Skip
