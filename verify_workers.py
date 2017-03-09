@@ -692,6 +692,8 @@ def upload_results():
     for dp_prefix, spreadsheetId in sorted(SHEETS.viewitems()):
         if dp_prefix == 'Summary':
             update_summary(spreadsheetId)
+        elif dp_prefix == 'DPC/TERRA/LAS_Tiles':
+            update_las_tiles_sheet(dp_prefix, spreadsheetId)
         else:
             update_sheet(dp_prefix, spreadsheetId)
 
@@ -773,7 +775,7 @@ def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
 
     if not has_new_results:
         logger.info('No new results! Exiting.')
-        return False
+        return
 
     # Create new values list
     logger.info('Creating new values list...')
@@ -807,21 +809,9 @@ def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     gs.update_values(rangeName, values)
 
     logging.info('Updating Google Sheet title...')
-    title = (dp_prefix + ' corrupted list (' +
-             datetime.now().strftime('%b %d, %Y') + ')')
-    requests = [{
-        'updateSpreadsheetProperties': {
-            'properties': {
-                'title': title
-            },
-            'fields': 'title'
-        }
-    }]
-    gs.batch_update(requests)
+    update_title(gs, dp_prefix)
 
     logger.info('Done!')
-
-    return True
 
 
 def update_summary(spreadsheetId):
@@ -928,6 +918,170 @@ def update_summary(spreadsheetId):
 
     logger.info('Done!')
 
+
+def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
+
+    logger.info('Updating %s sheet...', dp_prefix)
+
+    # Create GoogleSheet object
+    gs = GoogleSheet(spreadsheetId)
+
+    # Get current values table
+    rangeName = 'Sheet1!A:F'
+    logger.info('Getting current values from Google Sheet...')
+    values = gs.get_values(rangeName)
+
+    # Convert values table to dict
+    logger.info('Converting values to dict...')
+    values_dict = {}
+    headers = True
+    for row in values:
+
+        # Ignore headers
+        if headers:
+            headers = False
+            continue
+
+        file_server = row[0]  # A
+        block = row[1]  # B
+        las_only = row[2]  # C
+        laz_only = row[3]  # D
+        las_n_laz = row[4]  # E
+        uploaded = row[5]  # F
+
+        values_dict[(file_server, block)] = {
+            'las_only': las_only,
+            'laz_only': laz_only,
+            'las_n_laz': las_n_laz,
+            'uploaded': uploaded,
+        }
+
+    # Get all results
+    logger.info('Getting all results from db and updating dict...')
+    MYSQL_DB.connect()
+    q = Result.select().where((Result.has_error == True) &
+                              (Result.file_path.contains(dp_prefix +
+                                                         '%LAS_FILES')) &
+                              (Result.file_type == 'LAS/LAZ'))
+
+    # Collate results by block
+    has_new_results = False
+    cur_block = ''
+    las_set = set()
+    laz_set = set()
+    uploaded = datetime.min
+    for r in q:
+
+        # Get block name
+        path_tokens = r.file_path.split(os.sep)
+        block = path_tokens[4]
+
+        # Initialize current block
+        if cur_block != block:
+
+            if cur_block and (las_set or laz_set):
+                k = r.file_server, cur_block
+                las_only = ','.join([str(x) for x in sorted(las_set)])
+                laz_only = ','.join([str(x) for x in sorted(laz_set)])
+                las_n_laz = ','.join([str(x)
+                                      for x in sorted(las_set & laz_set)])
+
+                # Check if either the block or the las/laz file list is new
+                if (k not in values_dict or
+                    (k in values_dict and
+                        las_only != values_dict[k]['las_only'] and
+                        laz_only != values_dict[k]['laz_only'] and
+                        las_n_laz != values_dict[k]['las_n_laz'])):
+
+                    values_dict[k] = {
+                        'las_only': las_only,
+                        'laz_only': laz_only,
+                        'las_n_laz': las_n_laz,
+                        'uploaded': uploaded.strftime('%b %d, %Y'),
+                    }
+
+                    has_new_results = True
+
+            # Reset current block
+            cur_block = block
+            las_set = set()
+            laz_set = set()
+            uploaded = datetime.min
+
+        # Get file name and ext
+        fn, ext = os.path.splitext(path_tokens[-1])
+
+        # Get pt no.
+        try:
+            pt_no = int(fn[2:])
+        except Exception:
+            # Skip file
+            continue
+
+        # Add pt no. to set
+        if ext == '.las':
+            las_set.add(pt_no)
+        elif ext == '.laz':
+            laz_set.add(pt_no)
+
+        # Get latest uploaded time
+        if r.uploaded and r.uploaded > uploaded:
+            uploaded = r.uploaded
+        elif r.uploaded is None:
+            uploaded = datetime.now()
+
+    if not has_new_results:
+        logger.info('No new results! Exiting.')
+        return
+
+    # Create new values list
+    logger.info('Creating new values list...')
+    values = []
+    headers = ['file_server',
+               'block',
+               'las_only',
+               'laz_only',
+               'las_n_laz',
+               'uploaded']
+    values.append(headers)
+
+    for k in sorted(values_dict.keys()):
+
+        row = []
+
+        file_server, block = k
+        row.append(file_server)
+        row.append(block)
+
+        row.append(values_dict[k]['las_only'])
+        row.append(values_dict[k]['laz_only'])
+        row.append(values_dict[k]['las_n_laz'])
+        row.append(values_dict[k]['uploaded'])
+
+        values.append(row)
+
+    # Update Google Sheeet
+    logger.info('Updating Google Sheet...')
+    gs.update_values(rangeName, values)
+
+    logging.info('Updating Google Sheet title...')
+    update_title(gs, dp_prefix)
+
+    logger.info('Done!')
+
+
+def update_title(gs, dp_prefix):
+    title = (dp_prefix + ' corrupted list (' +
+             datetime.now().strftime('%b %d, %Y') + ')')
+    requests = [{
+        'updateSpreadsheetProperties': {
+            'properties': {
+                'title': title
+            },
+            'fields': 'title'
+        }
+    }]
+    gs.batch_update(requests)
 
 if __name__ == "__main__":
 
