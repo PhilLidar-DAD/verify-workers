@@ -1013,10 +1013,11 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
 
         # Get pt no.
         try:
+            # Try getting pt no
             pt_no = int(fn[2:])
         except Exception:
-            # Skip file
-            continue
+            # If not, just get the filename
+            pt_no = fn
 
         # Add pt no. to set
         if ext == '.las':
