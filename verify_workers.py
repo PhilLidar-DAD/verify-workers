@@ -833,7 +833,7 @@ def update_summary(spreadsheetId):
 
     for dp_prefix in sorted(SHEETS.viewkeys()):
 
-        if dp_prefix == 'Summary':
+        if dp_prefix == 'Summary' or dp_prefix == 'DPC/TERRA/LAS_Tiles':
             # Skip
             continue
 
