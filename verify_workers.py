@@ -762,12 +762,19 @@ def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
                 if len(remarks) >= 1000:
                     remarks = remarks[:997] + '...'
 
+                last_modified = None
+                try:
+                    last_modified = (datetime
+                                     .fromtimestamp(r.last_modified)
+                                     .strftime('%Y-%m-%d %H:%M:%S'))
+                except ValueError:
+                    pass
+
                 values_dict[k] = {
                     'file_ext': r.file_ext,
                     'file_type': r.file_type,
                     'remarks': remarks,
-                    'last_modified': (datetime.fromtimestamp(r.last_modified)
-                                      .strftime('%Y-%m-%d %H:%M:%S')),
+                    'last_modified': last_modified,
                     'uploaded': r.uploaded.strftime('%b %d, %Y'),
                 }
 
