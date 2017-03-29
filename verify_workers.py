@@ -111,13 +111,17 @@ def update(dir_path):
 
     path_tokens = dir_path.split(os.sep)
     dp_prefix = os.sep.join(path_tokens[3:])
+    logger.info('pre dp_prefix: %s', dp_prefix)
     with MYSQL_DB.atomic() as txn:
-        if dp_prefix:
+        if dp_prefix != '':
+
             # Temporarily set is_dir to False for all dirs in db that starts
             # with prefix
             if dp_prefix[-1] == os.sep:
                 dp_prefix = dp_prefix[:-1]
-            logger.info('dp_prefix: %s', dp_prefix)
+
+            logger.info('post dp_prefix: %s', dp_prefix)
+
             query = (Job
                      .update(is_dir=False)
                      .where(Job.dir_path.startswith(dp_prefix)))
@@ -138,8 +142,12 @@ def update(dir_path):
             path_tokens = root.split(os.sep)
             logger.debug('path_tokens: %s', path_tokens)
 
-            # Assuming, first two directories of the mount path isn't needed
+            # Assuming first two directories of the mount path isn't needed
             dp = os.sep.join(path_tokens[3:])
+
+            # Skip directory path if it's empty
+            if dp == '':
+                continue
 
             # Remove trailing os separator
             if dp[-1] == os.sep:
@@ -158,7 +166,7 @@ def update(dir_path):
 
     # Delete all dirs that don't exist anymore
     with MYSQL_DB.atomic() as txn:
-        if dp_prefix:
+        if dp_prefix != '':
             query = (Job
                      .delete()
                      .where((Job.is_dir == False) &
