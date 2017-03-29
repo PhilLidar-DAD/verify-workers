@@ -112,7 +112,7 @@ def update(dir_path):
     path_tokens = dir_path.split(os.sep)
     dp_prefix = os.sep.join(path_tokens[3:])
     with MYSQL_DB.atomic() as txn:
-        if dp_prefix:
+        if dp_prefix != '':
             # Temporarily set is_dir to False for all dirs in db that starts
             # with prefix
             if dp_prefix[-1] == os.sep:
@@ -158,7 +158,7 @@ def update(dir_path):
 
     # Delete all dirs that don't exist anymore
     with MYSQL_DB.atomic() as txn:
-        if dp_prefix:
+        if dp_prefix != '':
             query = (Job
                      .delete()
                      .where((Job.is_dir == False) &
