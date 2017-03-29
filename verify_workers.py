@@ -139,8 +139,12 @@ def update(dir_path):
             path_tokens = root.split(os.sep)
             logger.debug('path_tokens: %s', path_tokens)
 
-            # Assuming, first two directories of the mount path isn't needed
+            # Assuming first two directories of the mount path isn't needed
             dp = os.sep.join(path_tokens[3:])
+
+            # Skip directory path if it's empty
+            if dp == '':
+                continue
 
             # Remove trailing os separator
             if dp[-1] == os.sep:
