@@ -256,9 +256,14 @@ def map_network_drives():
                 logger.debug('local: %s', local)
                 # Map network drive
                 fqdn = f + MAP_DRV_DOMN
-                net_use_cmd = ('net use ' + local + r' \\' + fqdn +
-                               r'\geostorage /u:' + MAP_DRV_USER + ' ' +
-                               MAP_DRV_PASS + ' /persistent:yes')
+                if 'ftp' in f:
+                    net_use_cmd = ('net use ' + local + r' \\' + fqdn +
+                                   r'\FTP /u:' + MAP_DRV_USER + ' ' +
+                                   MAP_DRV_PASS + ' /persistent:yes')
+                else:
+                    net_use_cmd = ('net use ' + local + r' \\' + fqdn +
+                                   r'\geostorage /u:' + MAP_DRV_USER + ' ' +
+                                   MAP_DRV_PASS + ' /persistent:yes')
                 logger.debug('net_use_cmd: %s', net_use_cmd)
                 subprocess.call(net_use_cmd, shell=True)
 
