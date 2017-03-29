@@ -805,10 +805,16 @@ def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     # Get all results
     logger.info('Getting all results from db and updating dict...')
     MYSQL_DB.connect()
-    q = Result.select().where(Result.file_path.startswith(dp_prefix))
-    if has_error_only:
-        q = Result.select().where((Result.file_path.startswith(dp_prefix)) &
-                                  (Result.has_error == True))
+    if 'ftp' in dp_prefix:
+        q = Result.select().where(Result.file_server == dp_prefix)
+        if has_error_only:
+            q = Result.select().where((Result.file_server == dp_prefix) &
+                                      (Result.has_error == True))
+    else:
+        q = Result.select().where(Result.file_path.startswith(dp_prefix))
+        if has_error_only:
+            q = Result.select().where((Result.file_path.startswith(dp_prefix)) &
+                                      (Result.has_error == True))
 
     has_new_results = False
     with MYSQL_DB.atomic() as txn:
@@ -915,18 +921,31 @@ def update_summary(spreadsheetId):
         row.append(dp_prefix)
 
         # Add processed status
-        proc_dirs = (Job
-                     .select()
-                     .where((Job.dir_path.startswith(dp_prefix)) &
-                            (Job.status == True))
-                     .count())
+        if 'ftp' in dp_prefix:
+            proc_dirs = (Job
+                         .select()
+                         .where((Job.file_server == dp_prefix) &
+                                (Job.status == True))
+                         .count())
+        else:
+            proc_dirs = (Job
+                         .select()
+                         .where((Job.dir_path.startswith(dp_prefix)) &
+                                (Job.status == True))
+                         .count())
         logger.debug('proc_dirs: %s', proc_dirs)
         row.append(proc_dirs)
 
-        totl_dirs = (Job
-                     .select()
-                     .where(Job.dir_path.startswith(dp_prefix))
-                     .count())
+        if 'ftp' in dp_prefix:
+            totl_dirs = (Job
+                         .select()
+                         .where(Job.file_server == dp_prefix)
+                         .count())
+        else:
+            totl_dirs = (Job
+                         .select()
+                         .where(Job.dir_path.startswith(dp_prefix))
+                         .count())
         logger.debug('totl_dirs: %s', totl_dirs)
         row.append(totl_dirs)
 
@@ -935,18 +954,31 @@ def update_summary(spreadsheetId):
         row.append(pct_dirs)
 
         # Add error by file count
-        err_files = (Result
-                     .select()
-                     .where((Result.file_path.startswith(dp_prefix)) &
-                            (Result.has_error == True))
-                     .count())
+        if 'ftp' in dp_prefix:
+            err_files = (Result
+                         .select()
+                         .where((Result.file_server == dp_prefix) &
+                                (Result.has_error == True))
+                         .count())
+        else:
+            err_files = (Result
+                         .select()
+                         .where((Result.file_path.startswith(dp_prefix)) &
+                                (Result.has_error == True))
+                         .count())
         logger.debug('err_files: %s', err_files)
         row.append(err_files)
 
-        totl_files = (Result
-                      .select()
-                      .where(Result.file_path.startswith(dp_prefix))
-                      .count())
+        if 'ftp' in dp_prefix:
+            totl_files = (Result
+                          .select()
+                          .where(Result.file_server == dp_prefix)
+                          .count())
+        else:
+            totl_files = (Result
+                          .select()
+                          .where(Result.file_path.startswith(dp_prefix))
+                          .count())
         logger.debug('totl_files: %s', totl_files)
         row.append(totl_files)
 
@@ -955,18 +987,31 @@ def update_summary(spreadsheetId):
         row.append(pct_files)
 
         # Add error by file size
-        err_size = (Result
-                    .select(peewee.fn.SUM(Result.file_size))
-                    .where((Result.file_path.startswith(dp_prefix)) &
-                           (Result.has_error == True))
-                    .scalar())
+        if 'ftp' in dp_prefix:
+            err_size = (Result
+                        .select(peewee.fn.SUM(Result.file_size))
+                        .where((Result.file_server == dp_prefix) &
+                               (Result.has_error == True))
+                        .scalar())
+        else:
+            err_size = (Result
+                        .select(peewee.fn.SUM(Result.file_size))
+                        .where((Result.file_path.startswith(dp_prefix)) &
+                               (Result.has_error == True))
+                        .scalar())
         logger.debug('err_size: %s', err_size)
         row.append('%.2f' % (err_size / (1024 ** 4)))
 
-        totl_size = (Result
-                     .select(peewee.fn.SUM(Result.file_size))
-                     .where(Result.file_path.startswith(dp_prefix))
-                     .scalar())
+        if 'ftp' in dp_prefix:
+            totl_size = (Result
+                         .select(peewee.fn.SUM(Result.file_size))
+                         .where(Result.file_server == dp_prefix)
+                         .scalar())
+        else:
+            totl_size = (Result
+                         .select(peewee.fn.SUM(Result.file_size))
+                         .where(Result.file_path.startswith(dp_prefix))
+                         .scalar())
         logger.debug('totl_size: %s', totl_size)
         row.append('%.2f' % (totl_size / (1024 ** 4)))
 
