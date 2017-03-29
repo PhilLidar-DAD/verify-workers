@@ -111,13 +111,14 @@ def update(dir_path):
 
     path_tokens = dir_path.split(os.sep)
     dp_prefix = os.sep.join(path_tokens[3:])
+    logger.info('pre dp_prefix: %s', dp_prefix)
     with MYSQL_DB.atomic() as txn:
         if dp_prefix != '':
             # Temporarily set is_dir to False for all dirs in db that starts
             # with prefix
             if dp_prefix[-1] == os.sep:
                 dp_prefix = dp_prefix[:-1]
-            logger.info('dp_prefix: %s', dp_prefix)
+            logger.info('post dp_prefix: %s', dp_prefix)
             query = (Job
                      .update(is_dir=False)
                      .where(Job.dir_path.startswith(dp_prefix)))
