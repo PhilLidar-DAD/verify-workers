@@ -129,11 +129,10 @@ def update(dir_path):
         dirs[:] = sorted([d for d in dirs if not d[0] == '.'])
 
         if os.path.isdir(root):
-            # Assuming, first two directories of the path is always the mount
-            # path
             path_tokens = root.split(os.sep)
             logger.debug('path_tokens: %s', path_tokens)
 
+            # Assuming, first two directories of the mount path isn't needed
             dp = os.sep.join(path_tokens[3:])
 
             # Remove trailing os separator
@@ -260,13 +259,24 @@ def start_worker(worker_id):
     while True:
         try:
             MYSQL_DB.connect()
-            job = (Job
-                   .select()
-                   .where((Job.status == None) |
-                          ((Job.status == 0) &
-                           (Job.work_expiry < datetime.now())))
-                   .order_by(peewee.fn.Rand())
-                   .get())
+            if (worker_id % 2) == 0:
+                # If worker id is even, get random job
+                job = (Job
+                       .select()
+                       .where((Job.status == None) |
+                              ((Job.status == 0) &
+                               (Job.work_expiry < datetime.now())))
+                       .order_by(peewee.fn.Rand())
+                       .get())
+            else:
+                # If odd, order by dir path
+                job = (Job
+                       .select()
+                       .where((Job.status == None) |
+                              ((Job.status == 0) &
+                               (Job.work_expiry < datetime.now())))
+                       .order_by(Job.dir_path)
+                       .get())
             logger.info('[Worker-%s] Found job: %s:%s', worker_id,
                         job.file_server, job.dir_path)
             verify_dir(worker_id, job)
@@ -375,16 +385,16 @@ def verify_file(worker_id, file_path_):
     remarks = ''
     if file_ext in RASTERS:
         file_type = 'RASTER'
-        has_error, remarks = verify_raster(file_path)
+        has_error, remarks = verify_raster(file_path, checksum)
     elif file_ext in VECTORS:
         file_type = 'VECTOR'
-        has_error, remarks = verify_vector(file_path)
+        has_error, remarks = verify_vector(file_path, checksum)
     elif file_ext in LAS:
         file_type = 'LAS/LAZ'
-        has_error, remarks = verify_las(file_path)
+        has_error, remarks = verify_las(file_path, checksum)
     elif file_ext in ARCHIVES:
         file_type = 'ARCHIVE'
-        has_error, remarks = verify_archive(file_path)
+        has_error, remarks = verify_archive(file_path, checksum)
     else:
         is_processed = False
     logger.debug('[Worker-%s][%s] is_processed: %s has_error: %s \
@@ -444,7 +454,7 @@ def get_checksums(worker_id, file_path):
     return checksum, last_modified
 
 
-def verify_raster(file_path):
+def verify_raster(file_path, checksum):
 
     outfile = file_path + '.gdalinfo'
     output = None
@@ -460,7 +470,9 @@ def verify_raster(file_path):
         except Exception:
             pass
 
-    if output is None:
+    if (output is None or
+            (output and 'checksum' in output and
+                output['checksum'] != checksum)):
         # Process file and redirect output to json file
         proc = subprocess.Popen(
             ['gdalinfo', '-checksum', file_path], stdout=subprocess.PIPE,
@@ -468,13 +480,20 @@ def verify_raster(file_path):
         out, err = proc.communicate()
         returncode = proc.returncode
         output = {'out': str(out).lower(),
-                  'returncode': returncode}
+                  'returncode': returncode,
+                  'checksum': checksum}
         if "can't load requested dll" in output['out']:
             logger.error('Error loading requested dll! Exiting.')
             logger.error('out:\n%s', pformat(out))
             exit(1)
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True, ensure_ascii=False)
+
+    # Save checksum in output if missing
+    if 'checksum' not in output:
+        output['checksum'] = checksum
+        json.dump(output, open(outfile, 'w'), indent=4, sort_keys=True,
+                  ensure_ascii=False)
 
     # Determine if file is corrupted from output
     remarks_buf = []
@@ -500,7 +519,7 @@ def verify_raster(file_path):
     return has_error, remarks
 
 
-def verify_vector(file_path):
+def verify_vector(file_path, checksum):
 
     outfile = file_path + '.ogrinfo'
     output = None
@@ -516,7 +535,9 @@ def verify_vector(file_path):
         except Exception:
             pass
 
-    if output is None:
+    if (output is None or
+            (output and 'checksum' in output and
+                output['checksum'] != checksum)):
         # Process file and redirect output to json file
         proc = subprocess.Popen(
             ['ogrinfo', '-al', file_path], stdout=subprocess.PIPE,
@@ -531,6 +552,12 @@ def verify_vector(file_path):
             exit(1)
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True, ensure_ascii=False)
+
+    # Save checksum in output if missing
+    if 'checksum' not in output:
+        output['checksum'] = checksum
+        json.dump(output, open(outfile, 'w'), indent=4, sort_keys=True,
+                  ensure_ascii=False)
 
     # Determine if file is corrupted from output
     remarks_buf = []
@@ -565,7 +592,7 @@ def verify_vector(file_path):
     return has_error, remarks
 
 
-def verify_las(file_path):
+def verify_las(file_path, checksum):
 
     outfile = file_path + '.lasinfo'
     output = None
@@ -581,7 +608,9 @@ def verify_las(file_path):
         except Exception:
             pass
 
-    if output is None:
+    if (output is None or
+            (output and 'checksum' in output and
+                output['checksum'] != checksum)):
         # Process file and redirect output to json file
         proc = subprocess.Popen(
             ['lasinfo', file_path], stdout=subprocess.PIPE,
@@ -596,6 +625,12 @@ def verify_las(file_path):
             exit(1)
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True, ensure_ascii=False)
+
+    # Save checksum in output if missing
+    if 'checksum' not in output:
+        output['checksum'] = checksum
+        json.dump(output, open(outfile, 'w'), indent=4, sort_keys=True,
+                  ensure_ascii=False)
 
     # Determine if file is corrupted from output
     remarks_buf = []
@@ -634,7 +669,7 @@ def verify_las(file_path):
     return has_error, remarks
 
 
-def verify_archive(file_path):
+def verify_archive(file_path, checksum):
 
     outfile = file_path + '.7za'
     output = None
@@ -650,7 +685,9 @@ def verify_archive(file_path):
         except Exception:
             pass
 
-    if output is None:
+    if (output is None or
+            (output and 'checksum' in output and
+                output['checksum'] != checksum)):
         # Process file and redirect output to json file
         proc = subprocess.Popen(
             ['7za', 't', file_path], stdout=subprocess.PIPE,
@@ -665,6 +702,12 @@ def verify_archive(file_path):
             exit(1)
         json.dump(output, open(outfile, 'w'), indent=4,
                   sort_keys=True, ensure_ascii=False)
+
+    # Save checksum in output if missing
+    if 'checksum' not in output:
+        output['checksum'] = checksum
+        json.dump(output, open(outfile, 'w'), indent=4, sort_keys=True,
+                  ensure_ascii=False)
 
     # Load output from json file
     output = json.load(open(outfile, 'r'))
