@@ -12,6 +12,7 @@ LOG="verify_workers_server.log"
 ./verify_workers.py update /mnt/pmsat-nas_geostorage/DPC/ARC/ &>$LOG
 ./verify_workers.py update /mnt/pmsat-nas_geostorage/DPC/TERRA/ &>$LOG
 ./verify_workers.py update /mnt/maria_geostorage/DPC/LMS/ &>$LOG
+./verify_workers.py update /mnt/FTP/ &>$LOG
 
 # Report results
 ./verify_workers.py upload results &>$LOG
