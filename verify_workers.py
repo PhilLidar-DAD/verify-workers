@@ -180,6 +180,21 @@ result tables...")
     logger.info('Done! (%s)', end_time - start_time)
 
 
+def ignore_file_dir(name):
+    # Hidden files/dirs
+    if name.startswith('.'):
+        return True
+    # Checksums
+    if name in ['LAST_MODIFIED', 'SHA1SUMS']:
+        return True
+    # Output files
+    for file_ext in ['.gdalinfo', '.ogrinfo', '.lasinfo', '.7za']:
+        if name.endswith(file_ext):
+            return True
+
+    return False
+
+
 def update_worker(file_server, dir_path, dir_paths):
 
     try:
@@ -203,8 +218,8 @@ def update_worker(file_server, dir_path, dir_paths):
             status_done = True
             for i in sorted(os.listdir(dir_path)):
 
-                # Ignore hidden files/dirs, LAST_MODIFIED and SHA1SUMS
-                if i.startswith('.') or i == 'LAST_MODIFIED' or i == 'SHA1SUMS':
+                # Ignore some files/dirs
+                if ignore_file_dir(i):
                     continue
 
                 # Get complete path
@@ -435,8 +450,8 @@ def verify_dir(worker_id, job):
     logger.info('[Worker-%s] Getting file list...', worker_id)
     file_list = {}
     for f in sorted(os.listdir(dir_path)):
-        # Ignore hidden files/dirs, LAST_MODIFIED and SHA1SUMS
-        if f.startswith('.') or f == 'LAST_MODIFIED' or f == 'SHA1SUMS':
+        # Ignore some files/dirs
+        if ignore_file_dir(f):
             continue
         fp = os.path.join(dir_path, f)
         if os.path.isfile(fp):
@@ -1211,7 +1226,7 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     # Get current values table
     rangeName = 'Sheet1!A:F'
     logger.info('Getting current values from Google Sheet...')
-    values = gs.get_values(rangeName)
+    old_values = gs.get_values(rangeName)
 
     # Convert values table to dict
     logger.info('Converting values to dict...')
@@ -1219,7 +1234,7 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     has_changes = False
     has_empty_rows = False
     # Ignore header and footer
-    for row in values[1:-1]:
+    for row in old_values[1:-1]:
 
         try:
 
