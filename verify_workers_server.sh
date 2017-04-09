@@ -11,12 +11,12 @@ PYTHON_CMD="python -u verify_workers.py"
 
 # Update dirs in db
 $PYTHON_CMD update /mnt/pmsat-nas_geostorage/DPC/ARC/ &>$LOG
-$PYTHON_CMD update /mnt/maria_geostorage/DPC/LMS/ &>$LOG
-$PYTHON_CMD update /mnt/pmsat-nas_geostorage/DPC/TERRA/ &>$LOG
-$PYTHON_CMD update /mnt/FTP/ &>$LOG
+$PYTHON_CMD update /mnt/maria_geostorage/DPC/LMS/ &>>$LOG
+$PYTHON_CMD update /mnt/pmsat-nas_geostorage/DPC/TERRA/ &>>$LOG
+$PYTHON_CMD update /mnt/FTP/ &>>$LOG
 
 # Report results
-$PYTHON_CMD upload results &>$LOG
+$PYTHON_CMD upload results &>>$LOG
 
 # Return to orig dir
 popd
