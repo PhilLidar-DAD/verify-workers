@@ -221,19 +221,29 @@ def update_worker(file_server, dir_path, dir_paths):
                     # Get trimmed file path
                     result_fp = trim_mount_path(i_path)
 
-                    # logger.debug('[Worker-%s] %s', pid, result_fp)
-
                     try:
                         with MYSQL_DB.atomic() as txn:
                             # Get result file object from db
                             result = (Result
                                       .get(Result.file_server == file_server,
                                            Result.file_path == result_fp))
-                            # Validate file
-                            result.is_file = True
-                            # Save
-                            result.save()
-                        # pass
+                            # Get file size
+                            file_size = os.path.getsize(i_path)
+                            # Get checksums and last modified time
+                            checksum, last_modified = get_checksums(i_path,
+                                                                    skip_checksum=True)
+                            # If checksum matches db or file size and last
+                            # modified are the same
+                            if ((checksum and checksum == result.checksum) or
+                                    (file_size == result.file_size and
+                                        last_modified == result.last_modified)):
+                                # Validate file
+                                result.is_file = True
+                                # Save
+                                result.save()
+                            else:
+                                status_done = False
+
                     except Exception:
                         status_done = False
 
@@ -251,9 +261,6 @@ def update_worker(file_server, dir_path, dir_paths):
                             job.status = None
 
                         job.save()
-
-            # logger.debug('[Worker-%s] Closing database connection...', pid)
-            # MYSQL_DB.close()
 
     except Exception:
         logger.exception('Error running update worker! (%s)', dir_path)
@@ -496,7 +503,7 @@ def verify_file(worker_id, file_path_):
                  file_ext)
 
     # Get checksums and last modified time
-    checksum, last_modified = get_checksums(worker_id, file_path)
+    checksum, last_modified = get_checksums(file_path)
 
     file_type = None
     is_processed = True
@@ -536,7 +543,7 @@ remarks: %s', worker_id, file_path, is_processed, has_error, remarks)
     return file_path, result
 
 
-def get_checksums(worker_id, file_path):
+def get_checksums(file_path, skip_checksum=False):
 
     dir_path, file_name = os.path.split(file_path)
 
@@ -554,7 +561,7 @@ def get_checksums(worker_id, file_path):
                     fn = fn[1:]
                 if fn == file_name:
                     checksum = tokens[0]
-    if not checksum:
+    if not checksum and not skip_checksum:
         # Compute checksum
         shasum = subprocess.check_output(['sha1sum', file_path])
         tokens = shasum.strip().split()
