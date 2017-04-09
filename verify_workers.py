@@ -21,7 +21,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from __future__ import division
 from datetime import datetime, timedelta
 from google_sheet import GoogleSheet
-from models import MYSQL_DB, Job, Result
+from models import MYSQL_DB, Job, Result, migrate03
 from pprint import pprint, pformat
 from settings import *
 import argparse
@@ -56,7 +56,7 @@ def parse_arguments():
     parser_update.add_argument('update_dir_path')
 
     parser_start = subparsers.add_parser('start')
-    parser_start.add_argument('start_target', choices=['workers'])
+    parser_start.add_argument('start_target', choices=['workers', 'migrate'])
 
     parser_upload = subparsers.add_parser('upload')
     parser_upload.add_argument('upload_target', choices=['results'])
@@ -94,33 +94,39 @@ def setup_logging(args):
     logger.addHandler(fh)
 
 
-def update(dir_path):
+def trim_mount_path(path):
+    path_tokens = path.split(os.sep)
+    new_path = os.sep.join(path_tokens[3:])
+    # Return None if empty
+    if new_path == '':
+        return
+    # Remove trailing os separator
+    if new_path[-1] == os.sep:
+        new_path = new_path[:-1]
+    return new_path
 
-    # Connect to database
-    logger.info('Connecting to database...')
-    MYSQL_DB.connect()
+
+def update_dir(update_dir_path):
 
     # Check if directory path exists
-    if not os.path.isdir(dir_path):
-        logger.error("%s doesn't exist! Exiting.", dir_path)
+    if not os.path.isdir(update_dir_path):
+        logger.error("%s doesn't exist! Exiting.", update_dir_path)
         exit(1)
 
-    # Get server
+    # Get file server
     file_server = get_file_server(args.update_dir_path)
     logger.info('file_server: %s', file_server)
 
-    path_tokens = dir_path.split(os.sep)
-    dp_prefix = os.sep.join(path_tokens[3:])
-    logger.info('pre dp_prefix: %s', dp_prefix)
+    # Invalidate all dir_path's in job and all file_path's in result
+    logger.info('Connecting to database...')
+    MYSQL_DB.connect()
+    logger.info("Invalidating all dir_path's in job and all file_path's in \
+result tables...")
+    dp_prefix = trim_mount_path(update_dir_path)
+    logger.info('dp_prefix: %s', dp_prefix)
     with MYSQL_DB.atomic() as txn:
-        if dp_prefix != '':
-            # Temporarily set is_dir to False for all dirs in db that starts
-            # with prefix
-            if dp_prefix[-1] == os.sep:
-                dp_prefix = dp_prefix[:-1]
-
-            logger.info('post dp_prefix: %s', dp_prefix)
-
+        # Job
+        if dp_prefix:
             query = (Job
                      .update(is_dir=False)
                      .where(Job.dir_path.startswith(dp_prefix)))
@@ -130,52 +136,132 @@ def update(dir_path):
                      .update(is_dir=False)
                      .where(Job.file_server == file_server))
         query.execute()
+        logger.info('Job done...')
+        # Result
+        if dp_prefix:
+            query = (Result
+                     .update(is_file=False)
+                     .where(Result.file_path.startswith(dp_prefix)))
+        else:
+            # If prefix isn't available, use file server
+            query = (Result
+                     .update(is_file=False)
+                     .where(Result.file_server == file_server))
+        query.execute()
+        logger.info('Result done...')
+    MYSQL_DB.close()
+
+    # Initialize multiprocessing
+    start_time = datetime.now()
+    manager = multiprocessing.Manager()
+    pool = multiprocessing.Pool(processes=WORKERS)
+    dir_paths = manager.Queue()
 
     # Traverse directories
-    for root, dirs, files in os.walk(dir_path):
+    counter = 1
+    pool.apply_async(update_worker, (file_server, update_dir_path, dir_paths))
 
-        # Ignore hidden dirs
-        dirs[:] = sorted([d for d in dirs if not d[0] == '.'])
-
-        if os.path.isdir(root):
-            path_tokens = root.split(os.sep)
-            logger.debug('path_tokens: %s', path_tokens)
-
-            # Assuming first two directories of the mount path isn't needed
-            dp = os.sep.join(path_tokens[3:])
-
-            # Skip directory path if it's empty
-            if dp == '':
-                continue
-
-            # Remove trailing os separator
-            if dp[-1] == os.sep:
-                dp = dp[:-1]
-            logger.info('%s', dp)
-
-            # Add dir path as job
-            with MYSQL_DB.atomic() as txn:
-                job, created = Job.get_or_create(file_server=file_server,
-                                                 dir_path=dp,
-                                                 defaults={'is_dir': True})
-                # If not created, update result in db
-                if not created:
-                    job.is_dir = True
-                    job.save()
-
-    # Delete all dirs that don't exist anymore
-    with MYSQL_DB.atomic() as txn:
-        if dp_prefix != '':
-            query = (Job
-                     .delete()
-                     .where((Job.is_dir == False) &
-                            (Job.dir_path.startswith(dp_prefix))))
+    while counter > 0:
+        logger.debug('counter: %s', counter)
+        dir_path = dir_paths.get()
+        if dir_path == 'no-dir':
+            # dir has finished processing
+            counter -= 1
+            # logger.info('counter(-): %s', counter)
         else:
-            query = (Job
-                     .delete()
-                     .where((Job.is_dir == False) &
-                            (Job.file_server == file_server)))
-        query.execute()
+            # a new dir needs to be processed
+            counter += 1
+            pool.apply_async(update_worker, (file_server, dir_path, dir_paths))
+            # logger.info('counter(+): %s', counter)
+
+    pool.close()
+    pool.join()
+    end_time = datetime.now()
+    logger.info('Done! (%s)', end_time - start_time)
+
+
+def update_worker(file_server, dir_path, dir_paths):
+
+    try:
+
+        # Check if dir path exists
+        if os.path.isdir(dir_path):
+
+            # Get process id
+            pid = multiprocessing.current_process().pid
+
+            # Connect to database
+            # logger.debug('[Worker-%s] Connecting to database...', pid)
+            MYSQL_DB.connect()
+
+            # Get trimmed dir path
+            job_dp = trim_mount_path(dir_path)
+
+            logger.info('[Worker-%s] %s', pid, job_dp)
+
+            # For each content inside the directory
+            status_done = True
+            for i in sorted(os.listdir(dir_path)):
+
+                # Ignore hidden files/dirs, LAST_MODIFIED and SHA1SUMS
+                if i.startswith('.') or i == 'LAST_MODIFIED' or i == 'SHA1SUMS':
+                    continue
+
+                # Get complete path
+                i_path = os.path.join(dir_path, i)
+
+                # Check if directory
+                if os.path.isdir(i_path):
+                    # Add dir path to queue
+                    dir_paths.put(i_path)
+
+                # Check if file
+                elif os.path.isfile(i_path):
+
+                    # Get trimmed file path
+                    result_fp = trim_mount_path(i_path)
+
+                    # logger.debug('[Worker-%s] %s', pid, result_fp)
+
+                    try:
+                        with MYSQL_DB.atomic() as txn:
+                            # Get result file object from db
+                            result = (Result
+                                      .get(Result.file_server == file_server,
+                                           Result.file_path == result_fp))
+                            # Validate file
+                            result.is_file = True
+                            # Save
+                            result.save()
+                        # pass
+                    except Exception:
+                        status_done = False
+
+                # Add dir path as job
+                with MYSQL_DB.atomic() as txn:
+                    job, created = Job.get_or_create(file_server=file_server,
+                                                     dir_path=job_dp,
+                                                     defaults={'is_dir': True})
+                    # If not created, update result in db
+                    if not created:
+                        job.is_dir = True
+
+                        # If there are new files, reset done status
+                        if not status_done:
+                            job.status = None
+
+                        job.save()
+
+            # logger.debug('[Worker-%s] Closing database connection...', pid)
+            # MYSQL_DB.close()
+
+    except Exception:
+        logger.exception('Error running update worker! (%s)', dir_path)
+    finally:
+        if not MYSQL_DB.is_closed():
+            MYSQL_DB.close()
+
+    dir_paths.put('no-dir')
 
 
 def get_file_server(dir_path):
@@ -272,7 +358,7 @@ def map_network_drives():
             exit(1)
 
 
-def start_worker(worker_id):
+def verify_worker(worker_id):
 
     # Delay start
     delay = random.randint((worker_id - 1) * 5 + 1, worker_id * 5)
@@ -287,18 +373,20 @@ def start_worker(worker_id):
                 # If worker id is even, get random job
                 job = (Job
                        .select()
-                       .where((Job.status == None) |
-                              ((Job.status == 0) &
-                               (Job.work_expiry < datetime.now())))
+                       .where(((Job.status == None) |
+                               ((Job.status == 0) &
+                                (Job.work_expiry < datetime.now()))) &
+                              (Job.is_dir == True))
                        .order_by(peewee.fn.Rand())
                        .get())
             else:
                 # If odd, order by dir path
                 job = (Job
                        .select()
-                       .where((Job.status == None) |
-                              ((Job.status == 0) &
-                               (Job.work_expiry < datetime.now())))
+                       .where(((Job.status == None) |
+                               ((Job.status == 0) &
+                                (Job.work_expiry < datetime.now()))) &
+                              (Job.is_dir == True))
                        .order_by(Job.dir_path)
                        .get())
             logger.info('[Worker-%s] Found job: %s:%s', worker_id,
@@ -317,8 +405,8 @@ def start_worker(worker_id):
 
 def verify_dir(worker_id, job):
 
+    # Set working status
     with MYSQL_DB.atomic() as txn:
-        # Set working status
         job.status = 0
         job.work_expiry = datetime.now() + timedelta(hours=1)  # set time limit to 1hr
         job.save()
@@ -330,12 +418,19 @@ def verify_dir(worker_id, job):
     if not os.path.isdir(dir_path):
         logger.error("[Worker-%s] %s doesn't exist! Exiting.", worker_id,
                      dir_path)
+        # Invalidate directory
+        with MYSQL_DB.atomic() as txn:
+            job.is_dir = False
+            job.save()
         return
 
     # Get file list
     logger.info('[Worker-%s] Getting file list...', worker_id)
     file_list = {}
-    for f in os.listdir(dir_path):
+    for f in sorted(os.listdir(dir_path)):
+        # Ignore hidden files/dirs, LAST_MODIFIED and SHA1SUMS
+        if f.startswith('.') or f == 'LAST_MODIFIED' or f == 'SHA1SUMS':
+            continue
         fp = os.path.join(dir_path, f)
         if os.path.isfile(fp):
             file_list[fp] = None
@@ -433,7 +528,9 @@ remarks: %s', worker_id, file_path, is_processed, has_error, remarks)
         'remarks': remarks,
         'checksum': checksum,
         'last_modified': last_modified,
-        'processor': processor
+        'processor': processor,
+        'ftp_suggest': None,
+        'is_file': True
     }
 
     return file_path, result
@@ -765,7 +862,7 @@ def upload_results():
             update_sheet(dp_prefix, spreadsheetId)
 
 
-def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
+def update_sheet(dp_prefix, spreadsheetId):
 
     logger.info('Updating %s sheet...', dp_prefix)
 
@@ -773,52 +870,55 @@ def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     gs = GoogleSheet(spreadsheetId)
 
     # Get current values table
-    rangeName = 'Sheet1!A:G'
+    sheetName = 'Sheet1'
+    rangeName = sheetName + '!A:G'
     logger.info('Getting current values from Google Sheet...')
-    values = gs.get_values(rangeName)
+    old_values = gs.get_values(rangeName)
 
     # Convert values table to dict
     logger.info('Converting values to dict...')
     values_dict = {}
-    headers = True
-    for row in values:
+    has_changes = False
+    has_empty_rows = False
+    # Ignore header and footer
+    for row in old_values[1:-1]:
 
-        # Ignore headers
-        if headers:
-            headers = False
-            continue
+        try:
 
-        file_server = row[0]  # A
-        file_path = row[1]  # B
-        file_ext = row[2]  # C
-        file_type = row[3]  # D
-        remarks = row[4]  # E
-        last_modified = row[5]  # F
-        uploaded = row[6]  # G
+            file_server = row[0]  # A
+            file_path = row[1]  # B
+            file_ext = row[2]  # C
+            file_type = row[3]  # D
+            remarks = row[4]  # E
+            last_modified = row[5]  # F
+            uploaded = row[6]  # G
 
-        values_dict[(file_server, file_path)] = {
-            'file_ext': file_ext,
-            'file_type': file_type,
-            'remarks': remarks,
-            'last_modified': last_modified,
-            'uploaded': uploaded,
-        }
+            values_dict[(file_server, file_path)] = {
+                'file_ext': file_ext,
+                'file_type': file_type,
+                'remarks': remarks,
+                'last_modified': last_modified,
+                'uploaded': uploaded,
+                'valid': False
+            }
+
+        except IndexError:
+            # logger.exception('row: %s', row)
+            has_changes = True
+            has_empty_rows = True
 
     # Get all results
     logger.info('Getting all results from db and updating dict...')
     MYSQL_DB.connect()
     if 'ftp' in dp_prefix:
-        q = Result.select().where(Result.file_server == dp_prefix)
-        if has_error_only:
-            q = Result.select().where((Result.file_server == dp_prefix) &
-                                      (Result.has_error == True))
+        q = Result.select().where((Result.file_server == dp_prefix) &
+                                  (Result.has_error == True) &
+                                  (Result.is_file == True))
     else:
-        q = Result.select().where(Result.file_path.startswith(dp_prefix))
-        if has_error_only:
-            q = Result.select().where((Result.file_path.startswith(dp_prefix)) &
-                                      (Result.has_error == True))
+        q = Result.select().where((Result.file_path.startswith(dp_prefix)) &
+                                  (Result.has_error == True) &
+                                  (Result.is_file == True))
 
-    has_new_results = False
     with MYSQL_DB.atomic() as txn:
         for r in q:
 
@@ -849,17 +949,16 @@ def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
                     'remarks': remarks,
                     'last_modified': last_modified,
                     'uploaded': r.uploaded.strftime('%b %d, %Y'),
+                    'valid': True
                 }
 
-                has_new_results = True
+                has_changes = True
 
-    if not has_new_results:
-        logger.info('No new results! Exiting.')
-        return
+            else:
+                values_dict[k]['valid'] = True
 
     # Create new values list
     logger.info('Creating new values list...')
-    values = []
     headers = ['file_server',
                'file_path',
                'file_ext',
@@ -867,29 +966,74 @@ def update_sheet(dp_prefix, spreadsheetId, has_error_only=True):
                'remarks',
                'last_modified',
                'uploaded']
-    values.append(headers)
-    for k in sorted(values_dict.keys()):
-
-        row = []
+    new_values = []
+    for k, v in sorted(values_dict.viewitems()):
 
         file_server, file_path = k
-        row.append(file_server)
-        row.append(file_path)
 
-        row.append(values_dict[k]['file_ext'])
-        row.append(values_dict[k]['file_type'])
-        row.append(values_dict[k]['remarks'])
-        row.append(values_dict[k]['last_modified'])
-        row.append(values_dict[k]['uploaded'])
+        if v['valid']:
+            row = []
+            row.append(file_server)
+            row.append(file_path)
+            row.append(v['file_ext'])
+            row.append(v['file_type'])
+            row.append(v['remarks'])
+            row.append(v['last_modified'])
+            row.append(v['uploaded'])
+        else:
+            row = ['' for _ in range(len(headers))]
+            has_changes = True
+            has_empty_rows = True
 
-        values.append(row)
+        new_values.append(row)
+
+    # Number of rows must match the old values to empty them from the sheet
+    len_old = len(old_values) - 2  # remove header and footer
+    len_new = len(new_values)
+    logger.debug('len_old: %s', len_old)
+    logger.debug('A: len_new: %s', len_new)
+    if len_old > len_new:
+        for _ in range(len_old - len_new):
+            new_values.append(['' for _ in range(len(headers))])
+    logger.debug('B: len_new: %s', len(new_values))
+
+    new_values.sort()
+
+    # Add headers
+    new_values.insert(0, headers)
+
+    # Add footer
+    new_values.append(['---' for _ in range(len(headers))])
+
+    if not has_changes:
+        logger.info('No changes! Exiting.')
+        return
+
+    # Get start index of empty rows
+    startIndex = None
+    endIndex = None
+    if has_empty_rows:
+        for i in range(len(new_values)):
+            if new_values[i][0] == '' and startIndex is None:
+                startIndex = i
+            elif new_values[i][0] != '' and startIndex and endIndex is None:
+                endIndex = i
+                break
+
+        logger.debug('startIndex: %s', startIndex)
+        logger.debug('endIndex: %s', endIndex)
 
     # Update Google Sheeet
-    logger.info('Updating Google Sheet...')
-    gs.update_values(rangeName, values)
+    logger.info('Updating Google Sheet values...')
+    gs.update_values(rangeName, new_values)
 
-    logging.info('Updating Google Sheet title...')
-    update_title(gs, dp_prefix)
+    logger.info('Updating Google Sheet properties...')
+    if has_empty_rows:
+        update_properties(gs, dp_prefix, {'sheetName': sheetName,
+                                          'startIndex': startIndex,
+                                          'endIndex': endIndex})
+    else:
+        update_properties(gs, dp_prefix)
 
     logger.info('Done!')
 
@@ -927,13 +1071,15 @@ def update_summary(spreadsheetId):
             proc_dirs = (Job
                          .select()
                          .where((Job.file_server == dp_prefix) &
-                                (Job.status == True))
+                                (Job.status == True) &
+                                (Job.is_dir == True))
                          .count())
         else:
             proc_dirs = (Job
                          .select()
                          .where((Job.dir_path.startswith(dp_prefix)) &
-                                (Job.status == True))
+                                (Job.status == True) &
+                                (Job.is_dir == True))
                          .count())
         logger.debug('proc_dirs: %s', proc_dirs)
         row.append(proc_dirs)
@@ -941,12 +1087,14 @@ def update_summary(spreadsheetId):
         if 'ftp' in dp_prefix:
             totl_dirs = (Job
                          .select()
-                         .where(Job.file_server == dp_prefix)
+                         .where((Job.file_server == dp_prefix) &
+                                (Job.is_dir == True))
                          .count())
         else:
             totl_dirs = (Job
                          .select()
-                         .where(Job.dir_path.startswith(dp_prefix))
+                         .where((Job.dir_path.startswith(dp_prefix)) &
+                                (Job.is_dir == True))
                          .count())
         logger.debug('totl_dirs: %s', totl_dirs)
         row.append(totl_dirs)
@@ -960,13 +1108,15 @@ def update_summary(spreadsheetId):
             err_files = (Result
                          .select()
                          .where((Result.file_server == dp_prefix) &
-                                (Result.has_error == True))
+                                (Result.has_error == True) &
+                                (Result.is_file == True))
                          .count())
         else:
             err_files = (Result
                          .select()
                          .where((Result.file_path.startswith(dp_prefix)) &
-                                (Result.has_error == True))
+                                (Result.has_error == True) &
+                                (Result.is_file == True))
                          .count())
         logger.debug('err_files: %s', err_files)
         row.append(err_files)
@@ -974,12 +1124,14 @@ def update_summary(spreadsheetId):
         if 'ftp' in dp_prefix:
             totl_files = (Result
                           .select()
-                          .where(Result.file_server == dp_prefix)
+                          .where((Result.file_server == dp_prefix) &
+                                 (Result.is_file == True))
                           .count())
         else:
             totl_files = (Result
                           .select()
-                          .where(Result.file_path.startswith(dp_prefix))
+                          .where((Result.file_path.startswith(dp_prefix)) &
+                                 (Result.is_file == True))
                           .count())
         logger.debug('totl_files: %s', totl_files)
         row.append(totl_files)
@@ -993,13 +1145,15 @@ def update_summary(spreadsheetId):
             err_size = (Result
                         .select(peewee.fn.SUM(Result.file_size))
                         .where((Result.file_server == dp_prefix) &
-                               (Result.has_error == True))
+                               (Result.has_error == True) &
+                               (Result.is_file == True))
                         .scalar())
         else:
             err_size = (Result
                         .select(peewee.fn.SUM(Result.file_size))
                         .where((Result.file_path.startswith(dp_prefix)) &
-                               (Result.has_error == True))
+                               (Result.has_error == True) &
+                               (Result.is_file == True))
                         .scalar())
         logger.debug('err_size: %s', err_size)
         row.append('%.2f' % (err_size / (1024 ** 4)))
@@ -1007,12 +1161,14 @@ def update_summary(spreadsheetId):
         if 'ftp' in dp_prefix:
             totl_size = (Result
                          .select(peewee.fn.SUM(Result.file_size))
-                         .where(Result.file_server == dp_prefix)
+                         .where((Result.file_server == dp_prefix) &
+                                (Result.is_file == True))
                          .scalar())
         else:
             totl_size = (Result
                          .select(peewee.fn.SUM(Result.file_size))
-                         .where(Result.file_path.startswith(dp_prefix))
+                         .where((Result.file_path.startswith(dp_prefix)) &
+                                (Result.is_file == True))
                          .scalar())
         logger.debug('totl_size: %s', totl_size)
         row.append('%.2f' % (totl_size / (1024 ** 4)))
@@ -1053,27 +1209,31 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     # Convert values table to dict
     logger.info('Converting values to dict...')
     values_dict = {}
-    headers = True
-    for row in values:
+    has_changes = False
+    has_empty_rows = False
+    # Ignore header and footer
+    for row in values[1:-1]:
 
-        # Ignore headers
-        if headers:
-            headers = False
-            continue
+        try:
 
-        file_server = row[0]  # A
-        block = row[1]  # B
-        las_only = row[2]  # C
-        laz_only = row[3]  # D
-        las_n_laz = row[4]  # E
-        uploaded = row[5]  # F
+            file_server = row[0]  # A
+            block = row[1]  # B
+            las_only = row[2]  # C
+            laz_only = row[3]  # D
+            las_n_laz = row[4]  # E
+            uploaded = row[5]  # F
 
-        values_dict[(file_server, block)] = {
-            'las_only': las_only,
-            'laz_only': laz_only,
-            'las_n_laz': las_n_laz,
-            'uploaded': uploaded,
-        }
+            values_dict[(file_server, block)] = {
+                'las_only': las_only,
+                'laz_only': laz_only,
+                'las_n_laz': las_n_laz,
+                'uploaded': uploaded,
+                'valid': False
+            }
+
+        except IndexError:
+            has_changes = True
+            has_empty_rows = True
 
     # Get all results
     logger.info('Getting all results from db and updating dict...')
@@ -1081,10 +1241,10 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     q = Result.select().where((Result.has_error == True) &
                               (Result.file_path.contains(dp_prefix +
                                                          '%LAS_FILES')) &
-                              (Result.file_type == 'LAS/LAZ'))
+                              (Result.file_type == 'LAS/LAZ') &
+                              (Result.is_file == True))
 
     # Collate results by block
-    has_new_results = False
     cur_block = ''
     las_set = set()
     laz_set = set()
@@ -1098,6 +1258,7 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
         # Initialize current block
         if cur_block != block:
 
+            # Add previous block to values dict
             if cur_block and (las_set or laz_set):
                 k = r.file_server, cur_block
                 las_only = ','.join([str(x) for x in sorted(las_set)])
@@ -1117,9 +1278,13 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
                         'laz_only': laz_only,
                         'las_n_laz': las_n_laz,
                         'uploaded': uploaded.strftime('%b %d, %Y'),
+                        'valid': True
                     }
 
-                    has_new_results = True
+                    has_changes = True
+
+                else:
+                    values_dict[k]['valid'] = True
 
             # Reset current block
             cur_block = block
@@ -1150,58 +1315,113 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
         elif r.uploaded is None:
             uploaded = datetime.now()
 
-    if not has_new_results:
-        logger.info('No new results! Exiting.')
-        return
-
     # Create new values list
     logger.info('Creating new values list...')
-    values = []
     headers = ['file_server',
                'block',
                'las_only',
                'laz_only',
                'las_n_laz',
                'uploaded']
-    values.append(headers)
-
-    for k in sorted(values_dict.keys()):
-
-        row = []
+    new_values = []
+    for k, v in sorted(values_dict.viewitems()):
 
         file_server, block = k
-        row.append(file_server)
-        row.append(block)
 
-        row.append(values_dict[k]['las_only'])
-        row.append(values_dict[k]['laz_only'])
-        row.append(values_dict[k]['las_n_laz'])
-        row.append(values_dict[k]['uploaded'])
+        if v['valid']:
+            row = []
+            row.append(file_server)
+            row.append(block)
+            row.append(values_dict[k]['las_only'])
+            row.append(values_dict[k]['laz_only'])
+            row.append(values_dict[k]['las_n_laz'])
+            row.append(values_dict[k]['uploaded'])
+        else:
+            row = ['' for _ in range(len(headers))]
+            has_changes = True
+            has_empty_rows = True
 
-        values.append(row)
+        new_values.append(row)
+
+    # Number of rows must match the old values to empty them from the sheet
+    len_old = len(old_values) - 2  # remove header and footer
+    len_new = len(new_values)
+    logger.debug('len_old: %s', len_old)
+    logger.debug('A: len_new: %s', len_new)
+    if len_old > len_new:
+        for _ in range(len_old - len_new):
+            new_values.append(['' for _ in range(len(headers))])
+    logger.debug('B: len_new: %s', len(new_values))
+
+    new_values.sort()
+
+    # Add headers
+    new_values.append(headers)
+
+    # Add footer
+    new_values.append(['---' for _ in range(len(headers))])
+
+    if not has_changes:
+        logger.info('No new results! Exiting.')
+        return
+
+    # Get start and end index of empty rows
+    startIndex = None
+    endIndex = None
+    if has_empty_rows:
+        for i in range(len(new_values)):
+            if new_values[i][0] == '' and startIndex is None:
+                startIndex = i
+            elif new_values[i][0] != '' and endIndex is None:
+                endIndex = i
+                break
+
+        logger.info('startIndex: %s', startIndex)
+        logger.info('endIndex: %s', endIndex)
 
     # Update Google Sheeet
     logger.info('Updating Google Sheet...')
-    gs.update_values(rangeName, values)
+    gs.update_values(rangeName, new_values)
 
-    logging.info('Updating Google Sheet title...')
-    update_title(gs, dp_prefix)
+    logger.info('Updating Google Sheet properties...')
+    if has_empty_rows:
+        update_properties(gs, dp_prefix, {'sheetName': sheetName,
+                                          'startIndex': startIndex,
+                                          'endIndex': endIndex})
+    else:
+        update_properties(gs, dp_prefix)
 
     logger.info('Done!')
 
 
-def update_title(gs, dp_prefix):
+def update_properties(gs, dp_prefix, delete_rows=None):
+    logger.debug('delete_rows: %s', pformat(delete_rows, width=40))
     title = (dp_prefix + ' corrupted list (' +
              datetime.now().strftime('%b %d, %Y') + ')')
-    requests = [{
+    requests = []
+    requests.append({
         'updateSpreadsheetProperties': {
             'properties': {
                 'title': title
             },
             'fields': 'title'
         }
-    }]
+    })
+    if delete_rows:
+        sheetId = gs.get_sheet_id(delete_rows['sheetName'])
+        logger.debug('sheetId: %s', sheetId)
+        requests.append({
+            'deleteDimension': {
+                'range': {
+                    'sheetId': sheetId,
+                    'dimension': 'ROWS',
+                    'startIndex': delete_rows['startIndex'],
+                    'endIndex': delete_rows['endIndex']
+                }
+            }
+        })
     gs.batch_update(requests)
+
 
 if __name__ == "__main__":
 
@@ -1218,7 +1438,7 @@ if __name__ == "__main__":
 
     if 'update_dir_path' in args:
         logger.info('Update! %s', args.update_dir_path)
-        update(args.update_dir_path)
+        update_dir(args.update_dir_path)
 
     elif 'start_target' in args:
 
@@ -1237,11 +1457,17 @@ if __name__ == "__main__":
                 logger.info('Starting worker %s...', worker_id)
                 try:
                     # Start worker thread
-                    threading.Thread(target=start_worker,
+                    threading.Thread(target=verify_worker,
                                      args=(worker_id,)).start()
                 except Exception:
                     logger.exception('[Worker-%s] Error running worker!',
                                      worker_id)
+
+        elif args.start_target == 'suggest':
+            pass
+
+        elif args.start_target == 'migrate':
+            migrate03()
 
     elif 'upload_target' in args:
 

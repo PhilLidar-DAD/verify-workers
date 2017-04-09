@@ -56,6 +56,16 @@ class GoogleSheet:
             # print('Storing credentials to ' + credential_path)
         return credentials
 
+    def get_sheet_id(self, rangeName):
+        result = (self._service.spreadsheets()
+                  .get(spreadsheetId=self._spreadsheetId)
+                  .execute())
+        for sheet in result['sheets']:
+            properties = sheet['properties']
+            if properties['title'] == rangeName:
+                return properties['sheetId']
+        # pprint(result)
+
     def get_values(self, rangeName):
         result = self._service.spreadsheets().values().get(
             spreadsheetId=self._spreadsheetId, range=rangeName).execute()
@@ -82,6 +92,6 @@ if __name__ == '__main__':
     # gs = GoogleSheet('1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms')
     # pprint(gs.get_values('Class Data!A2:E'))
 
-    gs = GoogleSheet('1j2nNxHfqEFnDC_qFu00ncCM7139gR5OxWMcs5ylXDMQ')
+    gs = GoogleSheet('1JdqyBHqferJfWwIvy4R-WBu-4nq6v8XPMy3rJvK7KAU')
     # pprint(gs.get_values('Corrupted list (testing)!A:M'))
-    gs.update_values('Corrupted list (testing)!A:M', [['']])
+    pprint(gs.get_sheet_id('Sheet1'))

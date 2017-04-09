@@ -7,15 +7,16 @@ source /home/datamanager@ad.dream.upd.edu.ph/.virtualenvs/verify-workers/bin/act
 pushd /srv/scripts/sysad-tools/verify-workers
 
 LOG="verify_workers_server.log"
+PYTHON_CMD="python -u verify_workers.py"
 
 # Update dirs in db
-./verify_workers.py update /mnt/pmsat-nas_geostorage/DPC/ARC/ &>$LOG
-./verify_workers.py update /mnt/pmsat-nas_geostorage/DPC/TERRA/ &>$LOG
-./verify_workers.py update /mnt/maria_geostorage/DPC/LMS/ &>$LOG
-./verify_workers.py update /mnt/FTP/ &>$LOG
+$PYTHON_CMD update /mnt/pmsat-nas_geostorage/DPC/ARC/ &>$LOG
+$PYTHON_CMD update /mnt/maria_geostorage/DPC/LMS/ &>$LOG
+$PYTHON_CMD update /mnt/pmsat-nas_geostorage/DPC/TERRA/ &>$LOG
+$PYTHON_CMD update /mnt/FTP/ &>$LOG
 
 # Report results
-./verify_workers.py upload results &>$LOG
+$PYTHON_CMD upload results &>$LOG
 
 # Return to orig dir
 popd
