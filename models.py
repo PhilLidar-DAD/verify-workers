@@ -44,6 +44,8 @@ class Result(BaseModel):
     processor = peewee.CharField(null=True)
     ftp_suggest = peewee.CharField(max_length=512, null=True)
     is_file = peewee.BooleanField(null=True)
+    dir_path = peewee.CharField(max_length=512, null=True)
+    filename = peewee.CharField(null=True)
 
     class Meta:
         primary_key = peewee.CompositeKey('file_server', 'file_path')
@@ -75,6 +77,16 @@ def migrate03():
         migrate(
             # migrator.add_column('result', 'ftp_suggest', Result.ftp_suggest),
             migrator.add_column('result', 'is_file', Result.is_file),
+        )
+
+
+def migrate04():
+    MYSQL_DB.connect()
+    migrator = MySQLMigrator(MYSQL_DB)
+    with MYSQL_DB.atomic() as txn:
+        migrate(
+            migrator.add_column('result', 'dir_path', Result.dir_path),
+            migrator.add_column('result', 'filename', Result.filename),
         )
 
 
