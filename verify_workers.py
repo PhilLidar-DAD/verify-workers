@@ -196,46 +196,32 @@ def ignore_file_dir(name):
 
 
 def update_worker(file_server, dir_path, dir_paths):
-
     try:
-
         # Check if dir path exists
         if os.path.isdir(dir_path):
-
             # Get process id
             pid = multiprocessing.current_process().pid
-
             # Connect to database
-            # logger.debug('[Worker-%s] Connecting to database...', pid)
             MYSQL_DB.connect()
-
             # Get trimmed dir path
             job_dp = trim_mount_path(dir_path)
-
             logger.info('[Worker-%s] %s', pid, job_dp)
-
             # For each content inside the directory
             status_done = True
             for i in sorted(os.listdir(dir_path)):
-
                 # Ignore some files/dirs
                 if ignore_file_dir(i):
                     continue
-
                 # Get complete path
                 i_path = os.path.join(dir_path, i)
-
                 # Check if directory
                 if os.path.isdir(i_path):
                     # Add dir path to queue
                     dir_paths.put(i_path)
-
                 # Check if file
                 elif os.path.isfile(i_path):
-
                     # Get trimmed file path
                     result_fp = trim_mount_path(i_path)
-
                     try:
                         with MYSQL_DB.atomic() as txn:
                             # Get result file object from db
@@ -258,11 +244,10 @@ def update_worker(file_server, dir_path, dir_paths):
                                 result.save()
                             else:
                                 status_done = False
-
                     except Exception:
                         status_done = False
-
-                # Add dir path as job
+            # Add dir path as job
+            if job_dp:
                 with MYSQL_DB.atomic() as txn:
                     job, created = Job.get_or_create(file_server=file_server,
                                                      dir_path=job_dp,
@@ -270,19 +255,15 @@ def update_worker(file_server, dir_path, dir_paths):
                     # If not created, update result in db
                     if not created:
                         job.is_dir = True
-
                         # If there are new files, reset done status
                         if not status_done:
                             job.status = None
-
                         job.save()
-
     except Exception:
         logger.exception('Error running update worker! (%s)', dir_path)
     finally:
         if not MYSQL_DB.is_closed():
             MYSQL_DB.close()
-
     dir_paths.put('no-dir')
 
 
