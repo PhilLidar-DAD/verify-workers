@@ -21,7 +21,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 from __future__ import division
 from datetime import datetime, timedelta
 from google_sheet import GoogleSheet
-from models import MYSQL_DB, Job, Result, migrate03
+from models import *
 from pprint import pprint, pformat
 from settings import *
 import argparse
@@ -56,7 +56,8 @@ def parse_arguments():
     parser_update.add_argument('update_dir_path')
 
     parser_start = subparsers.add_parser('start')
-    parser_start.add_argument('start_target', choices=['workers', 'migrate'])
+    parser_start.add_argument('start_target', choices=['workers', 'migrate',
+                                                       'suggest'])
 
     parser_upload = subparsers.add_parser('upload')
     parser_upload.add_argument('upload_target', choices=['results'])
@@ -196,46 +197,32 @@ def ignore_file_dir(name):
 
 
 def update_worker(file_server, dir_path, dir_paths):
-
     try:
-
         # Check if dir path exists
         if os.path.isdir(dir_path):
-
             # Get process id
             pid = multiprocessing.current_process().pid
-
             # Connect to database
-            # logger.debug('[Worker-%s] Connecting to database...', pid)
             MYSQL_DB.connect()
-
             # Get trimmed dir path
             job_dp = trim_mount_path(dir_path)
-
             logger.info('[Worker-%s] %s', pid, job_dp)
-
             # For each content inside the directory
             status_done = True
             for i in sorted(os.listdir(dir_path)):
-
                 # Ignore some files/dirs
                 if ignore_file_dir(i):
                     continue
-
                 # Get complete path
                 i_path = os.path.join(dir_path, i)
-
                 # Check if directory
                 if os.path.isdir(i_path):
                     # Add dir path to queue
                     dir_paths.put(i_path)
-
                 # Check if file
                 elif os.path.isfile(i_path):
-
                     # Get trimmed file path
                     result_fp = trim_mount_path(i_path)
-
                     try:
                         with MYSQL_DB.atomic() as txn:
                             # Get result file object from db
@@ -254,15 +241,20 @@ def update_worker(file_server, dir_path, dir_paths):
                                         last_modified == result.last_modified)):
                                 # Validate file
                                 result.is_file = True
+                                # Set dir_path and filename if null
+                                if not result.dir_path or not result.filename:
+                                    dir_path, filename = os.path.split(
+                                        result.file_path)
+                                    result.dir_path = dir_path
+                                    result.filename = filename
                                 # Save
                                 result.save()
                             else:
                                 status_done = False
-
                     except Exception:
                         status_done = False
-
-                # Add dir path as job
+            # Add dir path as job
+            if job_dp:
                 with MYSQL_DB.atomic() as txn:
                     job, created = Job.get_or_create(file_server=file_server,
                                                      dir_path=job_dp,
@@ -270,19 +262,15 @@ def update_worker(file_server, dir_path, dir_paths):
                     # If not created, update result in db
                     if not created:
                         job.is_dir = True
-
                         # If there are new files, reset done status
                         if not status_done:
                             job.status = None
-
                         job.save()
-
     except Exception:
         logger.exception('Error running update worker! (%s)', dir_path)
     finally:
         if not MYSQL_DB.is_closed():
             MYSQL_DB.close()
-
     dir_paths.put('no-dir')
 
 
@@ -478,6 +466,10 @@ def verify_dir(worker_id, job):
                 logger.debug('[Worker-%s] %s, %s', worker_id, drive, tail)
                 fp = tail[1:].replace(os.sep, os.altsep)
                 logger.debug('[Worker-%s] fp: %s', worker_id, fp)
+                # Separate dir_path and filename
+                dir_path, filename = os.path.split(fp)
+                res['dir_path'] = dir_path
+                res['filename'] = filename
                 # Add result to db
                 db_res, created = Result.get_or_create(file_server=job.file_server,
                                                        file_path=fp,
@@ -560,7 +552,7 @@ remarks: %s', worker_id, file_path, is_processed, has_error, remarks)
 
 def get_checksums(file_path, skip_checksum=False):
 
-    dir_path, file_name = os.path.split(file_path)
+    dir_path, filename = os.path.split(file_path)
 
     # Check if SHA1SUMS file already exists
     checksum = None
@@ -574,7 +566,7 @@ def get_checksums(file_path, skip_checksum=False):
                 fn = tokens[1]
                 if fn.startswith('?'):
                     fn = fn[1:]
-                if fn == file_name:
+                if fn == filename:
                     checksum = tokens[0]
     if not checksum and not skip_checksum:
         # Compute checksum
@@ -588,8 +580,8 @@ def get_checksums(file_path, skip_checksum=False):
     if os.path.isfile(last_modified_filepath):
 
         last_modified_all = json.load(open(last_modified_filepath, 'r'))
-        if file_name in last_modified_all:
-            last_modified = last_modified_all[file_name]
+        if filename in last_modified_all:
+            last_modified = last_modified_all[filename]
     if not last_modified:
         # Get last modified time
         last_modified = os.stat(file_path).st_mtime
@@ -1379,7 +1371,7 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     new_values.sort()
 
     # Add headers
-    new_values.append(headers)
+    new_values.insert(0, headers)
 
     # Add footer
     new_values.append(['---' for _ in range(len(headers))])
@@ -1446,6 +1438,64 @@ def update_properties(gs, dp_prefix, delete_rows=None):
     gs.batch_update(requests)
 
 
+def find_ftp_suggestions():
+    try:
+        MYSQL_DB.connect()
+        for k, v in BLOCK_NAME_INDEX.viewitems():
+            q = Result.select().where((Result.file_path.startswith(k)) &
+                                      (Result.has_error == True) &
+                                      (Result.is_file == True) &
+                                      (Result.ftp_suggest >> None))
+            with MYSQL_DB.atomic() as txn:
+                for r in q:
+                    # logger.debug('r.file_path: %s', r.file_path)
+                    # Get block name
+                    if os.name == 'nt':
+                        path_tokens = r.file_path.split(os.altsep)
+                    else:
+                        path_tokens = r.file_path.split(os.sep)
+                    if len(path_tokens) >= v + 1:
+                        logger.debug('r.file_path: %s', r.file_path)
+                        block_name = path_tokens[v]
+                        # block_name = 'Agno10A_20130529'
+                        logger.debug('block_name: %s', block_name)
+
+                        # Get filename
+                        filename = os.path.basename(r.file_path)
+                        # filename = 'pt000001.laz'
+                        logger.debug('filename: %s', filename)
+
+                        # Find file from ftp
+                        match_str = '%' + block_name + '%' + filename
+                        logger.debug('match_str: %s', match_str)
+
+                        match = None
+                        try:
+                            # match = (Result
+                            #          .select()
+                            #          .where((Result.has_error == False) &
+                            #                 (Result.is_file == True) &
+                            #                 (Result.file_server == 'ftp01') &
+                            #                 (Result.file_path % match_str))
+                            #          .get())
+                            match = Result.raw("""
+
+                                """)
+                        except Result.DoesNotExist:
+                            pass
+
+                        if match:
+                            logger.info('%s: %s', r.file_path, match.file_path)
+                            break
+                        else:
+                            logger.debug('%s: match not found', r.file_path)
+
+    except Exception:
+        logger.exception('Error finding ftp suggestions!')
+    finally:
+        if not MYSQL_DB.is_closed():
+            MYSQL_DB.close()
+
 if __name__ == "__main__":
 
     # Parge arguments
@@ -1487,10 +1537,10 @@ if __name__ == "__main__":
                                      worker_id)
 
         elif args.start_target == 'suggest':
-            pass
+            find_ftp_suggestions()
 
         elif args.start_target == 'migrate':
-            migrate03()
+            migrate04()
 
     elif 'upload_target' in args:
 
@@ -1498,3 +1548,5 @@ if __name__ == "__main__":
 
             logger.info('Uploading results...')
             upload_results()
+
+    logger.info('All done!')
