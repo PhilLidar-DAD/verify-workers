@@ -586,7 +586,7 @@ def get_checksums(file_path, skip_checksum=False):
         # Get last modified time
         last_modified = os.stat(file_path).st_mtime
 
-    return checksum, last_modified
+    return checksum, int(last_modified)
 
 
 def verify_raster(file_path, checksum):
