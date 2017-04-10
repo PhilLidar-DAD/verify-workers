@@ -1360,7 +1360,7 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     new_values.sort()
 
     # Add headers
-    new_values.append(headers)
+    new_values.insert(0, headers)
 
     # Add footer
     new_values.append(['---' for _ in range(len(headers))])
