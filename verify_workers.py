@@ -1224,7 +1224,8 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     gs = GoogleSheet(spreadsheetId)
 
     # Get current values table
-    rangeName = 'Sheet1!A:F'
+    sheetName = 'Sheet1'
+    rangeName = sheetName + '!A:F'
     logger.info('Getting current values from Google Sheet...')
     old_values = gs.get_values(rangeName)
 
