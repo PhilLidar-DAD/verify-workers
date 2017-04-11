@@ -95,6 +95,29 @@ def setup_logging(args):
     logger.addHandler(fh)
 
 
+def connect_db():
+    # Connect to database
+    retry = True
+    while retry:
+        try:
+            MYSQL_DB.connect()
+            retry = False
+        except Exception:
+            delay = random.randint(0, 1000) / 1000.
+            # logger.exception(
+            #     '[Worker-%s] Error connecting to database! Retrying in %ss...', pid, delay)
+            logger.exception(
+                'Error connecting to database! Retrying in %ss...', delay)
+            retry = True
+            time.sleep(delay)
+
+
+def close_db():
+    # Close database
+    if not MYSQL_DB.is_closed():
+        MYSQL_DB.close()
+
+
 def trim_mount_path(path):
     path_tokens = path.split(os.sep)
     new_path = os.sep.join(path_tokens[3:])
@@ -120,7 +143,7 @@ def update_dir(update_dir_path):
 
     # Invalidate all dir_path's in job and all file_path's in result
     logger.info('Connecting to database...')
-    MYSQL_DB.connect()
+    connect_db()
     logger.info("Invalidating all dir_path's in job and all file_path's in \
 result tables...")
     dp_prefix = trim_mount_path(update_dir_path)
@@ -150,7 +173,7 @@ result tables...")
                      .where(Result.file_server == file_server))
         query.execute()
         logger.info('Result done...')
-    MYSQL_DB.close()
+    close_db()
 
     # Initialize multiprocessing
     start_time = datetime.now()
@@ -160,6 +183,7 @@ result tables...")
 
     # Traverse directories
     counter = 1
+    dir_count = 1
     pool.apply_async(update_worker, (file_server, update_dir_path, dir_paths))
 
     while counter > 0:
@@ -172,12 +196,14 @@ result tables...")
         else:
             # a new dir needs to be processed
             counter += 1
+            dir_count += 1
             pool.apply_async(update_worker, (file_server, dir_path, dir_paths))
             # logger.info('counter(+): %s', counter)
 
     pool.close()
     pool.join()
     end_time = datetime.now()
+    logger.info('dir_count: %s', dir_count)
     logger.info('Done! (%s)', end_time - start_time)
 
 
@@ -202,8 +228,7 @@ def update_worker(file_server, dir_path, dir_paths):
         if os.path.isdir(dir_path):
             # Get process id
             pid = multiprocessing.current_process().pid
-            # Connect to database
-            MYSQL_DB.connect()
+            connect_db()
             # Get trimmed dir path
             job_dp = trim_mount_path(dir_path)
             logger.info('[Worker-%s] %s', pid, job_dp)
@@ -223,36 +248,40 @@ def update_worker(file_server, dir_path, dir_paths):
                 elif os.path.isfile(i_path):
                     # Get trimmed file path
                     result_fp = trim_mount_path(i_path)
+                    # Get result file object from db
+                    result = None
                     try:
-                        with MYSQL_DB.atomic() as txn:
-                            # Get result file object from db
-                            result = (Result
-                                      .get(Result.file_server == file_server,
-                                           Result.file_path == result_fp))
-                            # Get file size
-                            file_size = os.path.getsize(i_path)
-                            # Get checksums and last modified time
-                            checksum, last_modified = get_checksums(i_path,
-                                                                    skip_checksum=True)
-                            # If checksum matches db or file size and last
-                            # modified are the same
-                            if ((checksum and checksum == result.checksum) or
-                                    (file_size == result.file_size and
-                                        last_modified == result.last_modified)):
-                                # Validate file
-                                result.is_file = True
-                                # Set dir_path and filename if null
-                                if not result.dir_path or not result.filename:
-                                    dir_path, filename = os.path.split(
-                                        result.file_path)
-                                    result.dir_path = dir_path
-                                    result.filename = filename
+                        result = (Result
+                                  .select()
+                                  .where((Result.file_server == file_server)
+                                         & (Result.file_path == result_fp))
+                                  .get())
+                    except Result.DoesNotExist:
+                        status_done = False
+                    if result:
+                        # Get file size
+                        file_size = os.path.getsize(i_path)
+                        # Get checksums and last modified time
+                        checksum, last_modified = get_checksums(i_path,
+                                                                skip_checksum=True)
+                        # If checksum matches db or file size and last
+                        # modified are the same
+                        if ((checksum and checksum == result.checksum) or
+                                (file_size == result.file_size and
+                                    last_modified == result.last_modified)):
+                            # Validate file
+                            result.is_file = True
+                            # Set dir_path and filename if null
+                            if not result.dir_path or not result.filename:
+                                dirname, filename = os.path.split(
+                                    result.file_path)
+                                result.dirname = dirname
+                                result.filename = filename
+                            with MYSQL_DB.atomic() as txn:
                                 # Save
                                 result.save()
-                            else:
-                                status_done = False
-                    except Exception:
-                        status_done = False
+                        else:
+                            status_done = False
             # Add dir path as job
             if job_dp:
                 with MYSQL_DB.atomic() as txn:
@@ -269,8 +298,7 @@ def update_worker(file_server, dir_path, dir_paths):
     except Exception:
         logger.exception('Error running update worker! (%s)', dir_path)
     finally:
-        if not MYSQL_DB.is_closed():
-            MYSQL_DB.close()
+        close_db()
     dir_paths.put('no-dir')
 
 
@@ -378,7 +406,7 @@ def verify_worker(worker_id):
     # Get directory to verify from db
     while True:
         try:
-            MYSQL_DB.connect()
+            connect_db()
             if (worker_id % 2) == 0:
                 # If worker id is even, get random job
                 job = (Job
@@ -405,8 +433,7 @@ def verify_worker(worker_id):
         except Exception:
             logger.exception('[Worker-%s] Error running job!', worker_id)
         finally:
-            if not MYSQL_DB.is_closed():
-                MYSQL_DB.close()
+            close_db()
         # Sleep
         delay = random.randint(1, 5)
         logger.info('[Worker-%s] Sleeping for %ssecs...', worker_id, delay)
@@ -586,7 +613,7 @@ def get_checksums(file_path, skip_checksum=False):
         # Get last modified time
         last_modified = os.stat(file_path).st_mtime
 
-    return checksum, last_modified
+    return checksum, int(last_modified)
 
 
 def verify_raster(file_path, checksum):
@@ -923,7 +950,6 @@ def update_sheet(dp_prefix, spreadsheetId):
 
     # Get all results
     logger.info('Getting all results from db and updating dict...')
-    MYSQL_DB.connect()
     if 'ftp' in dp_prefix:
         q = Result.select().where((Result.file_server == dp_prefix) &
                                   (Result.has_error == True) &
@@ -932,7 +958,7 @@ def update_sheet(dp_prefix, spreadsheetId):
         q = Result.select().where((Result.file_path.startswith(dp_prefix)) &
                                   (Result.has_error == True) &
                                   (Result.is_file == True))
-
+    connect_db()
     with MYSQL_DB.atomic() as txn:
         for r in q:
 
@@ -970,6 +996,7 @@ def update_sheet(dp_prefix, spreadsheetId):
 
             else:
                 values_dict[k]['valid'] = True
+    close_db()
 
     # Create new values list
     logger.info('Creating new values list...')
@@ -1069,6 +1096,7 @@ def update_summary(spreadsheetId):
                'Percentage of files with error by file size']
     values.append(headers)
 
+    connect_db()
     for dp_prefix in sorted(SHEETS.viewkeys()):
 
         if dp_prefix == 'Summary' or dp_prefix == 'DPC/TERRA/LAS_Tiles':
@@ -1192,6 +1220,7 @@ def update_summary(spreadsheetId):
         row.append(pct_size)
 
         values.append(row)
+    close_db()
 
     values.append(['' for _ in range(10)])
     values.append(['as of ' + (datetime
@@ -1252,18 +1281,17 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
 
     # Get all results
     logger.info('Getting all results from db and updating dict...')
-    MYSQL_DB.connect()
     q = Result.select().where((Result.has_error == True) &
                               (Result.file_path.contains(dp_prefix +
                                                          '%LAS_FILES')) &
                               (Result.file_type == 'LAS/LAZ') &
                               (Result.is_file == True))
-
     # Collate results by block
     cur_block = ''
     las_set = set()
     laz_set = set()
     uploaded = datetime.min
+    connect_db()
     for r in q:
 
         # Get block name
@@ -1329,6 +1357,8 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
             uploaded = r.uploaded
         elif r.uploaded is None:
             uploaded = datetime.now()
+
+    close_db()
 
     # Create new values list
     logger.info('Creating new values list...')
@@ -1440,7 +1470,7 @@ def update_properties(gs, dp_prefix, delete_rows=None):
 
 def find_ftp_suggestions():
     try:
-        MYSQL_DB.connect()
+        connect_db()
         for k, v in BLOCK_NAME_INDEX.viewitems():
             q = Result.select().where((Result.file_path.startswith(k)) &
                                       (Result.has_error == True) &
@@ -1479,8 +1509,10 @@ def find_ftp_suggestions():
                             #                 (Result.file_path % match_str))
                             #          .get())
                             match = Result.raw("""
-
-                                """)
+SELECT *
+FROM result
+WHERE has_error = %s AND is_file = %s
+                                """, False, True)
                         except Result.DoesNotExist:
                             pass
 
@@ -1493,8 +1525,7 @@ def find_ftp_suggestions():
     except Exception:
         logger.exception('Error finding ftp suggestions!')
     finally:
-        if not MYSQL_DB.is_closed():
-            MYSQL_DB.close()
+        close_db()
 
 if __name__ == "__main__":
 

@@ -5,9 +5,11 @@ import peewee
 
 # Define database models
 MYSQL_DB = peewee.MySQLDatabase(
-    DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST, charset='latin1')
+    DB_NAME, user=DB_USER, password=DB_PASS, host=DB_HOST, charset='latin1',
+    threadlocals=True)
 # MYSQL_DB = PooledMySQLDatabase(DB_NAME, user=DB_USER, password=DB_PASS,
-#                                host=DB_HOST, charset='latin1')
+#                                host=DB_HOST, charset='latin1',
+#                                threadlocals=True)
 
 
 class BaseModel(peewee.Model):
@@ -97,4 +99,22 @@ def create_tables():
 
 
 if __name__ == "__main__":
-    migrate03()
+
+    block_name = 'Agno10A_20130529'
+    filename = 'pt000001.laz'
+
+    q = Result.raw("""
+SELECT *
+FROM result
+WHERE has_error = %s AND
+      is_file = %s AND
+      file_server = %s AND
+      ftp_suggest IS NULL
+LIMIT 1""", False, True, 'ftp01')
+    # , filename, block_name)
+#       filename = %s
+# ORDER BY jaro_winkler_similarity(dir_path, %s)
+    for r in q.execute():
+        print r.file_path
+        print r.is_file
+        print r.file_server
