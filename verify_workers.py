@@ -273,9 +273,8 @@ def update_worker(file_server, dir_path, dir_paths):
                             result.is_file = True
                             # Set dir_path and filename if null
                             if not result.dir_path or not result.filename:
-                                dirname, filename = os.path.split(
-                                    result.file_path)
-                                result.dirname = dirname
+                                dirname, filename = os.path.split(result_fp)
+                                result.dir_path = dirname
                                 result.filename = filename
                             with MYSQL_DB.atomic() as txn:
                                 # Save
