@@ -44,7 +44,7 @@ class Result(BaseModel):
     last_modified = peewee.BigIntegerField()
     uploaded = peewee.DateTimeField(null=True)
     processor = peewee.CharField(null=True)
-    ftp_suggest = peewee.CharField(max_length=512, null=True)
+    ftp_suggest = peewee.TextField(null=True)
     is_file = peewee.BooleanField(null=True)
     dir_path = peewee.CharField(max_length=512, null=True)
     filename = peewee.CharField(null=True)
@@ -108,12 +108,11 @@ SELECT *
 FROM result
 WHERE has_error = %s AND
       is_file = %s AND
-      file_server = %s AND
-      ftp_suggest IS NULL
+      file_server = %s
 LIMIT 1""", False, True, 'ftp01')
     # , filename, block_name)
 #       filename = %s
-# ORDER BY jaro_winkler_similarity(dir_path, %s)
+# ORDER BY jaro_winkler_similarity(dir_path, %s) DESC
     for r in q.execute():
         print r.file_path
         print r.is_file
