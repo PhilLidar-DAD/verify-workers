@@ -911,7 +911,7 @@ def update_sheet(dp_prefix, spreadsheetId):
 
     # Get current values table
     sheetName = 'Sheet1'
-    rangeName = sheetName + '!A:G'
+    rangeName = sheetName + '!A:H'
     logger.info('Getting current values from Google Sheet...')
     old_values = gs.get_values(rangeName)
 
@@ -942,8 +942,15 @@ def update_sheet(dp_prefix, spreadsheetId):
                 'valid': False
             }
 
+            try:
+                ftp_suggest = row[7]  # H
+                values_dict[(file_server, file_path)][
+                    'ftp_suggest'] = ftp_suggest
+            except IndexError:
+                # Ignore
+                pass
+
         except IndexError:
-            # logger.exception('row: %s', row)
             has_changes = True
             has_empty_rows = True
 
@@ -958,43 +965,49 @@ def update_sheet(dp_prefix, spreadsheetId):
                                   (Result.has_error == True) &
                                   (Result.is_file == True))
     connect_db()
-    with MYSQL_DB.atomic() as txn:
-        for r in q:
+    for r in q:
 
-            k = (r.file_server, r.file_path)
+        k = (r.file_server, r.file_path)
 
-            if r.uploaded is None:
-                r.uploaded = datetime.now()
+        if r.uploaded is None:
+            r.uploaded = datetime.now()
+            with MYSQL_DB.atomic() as txn:
                 r.save()
 
-            if k not in values_dict:
+        if k not in values_dict:
 
-                # Limit remarks to 1000 chars
-                remarks = r.remarks
-                if len(remarks) >= 1000:
-                    remarks = remarks[:997] + '...'
+            # Limit remarks to 1000 chars
+            remarks = r.remarks
+            if len(remarks) >= 1000:
+                remarks = remarks[:997] + '...'
 
-                last_modified = None
-                try:
-                    last_modified = (datetime
-                                     .fromtimestamp(r.last_modified)
-                                     .strftime('%Y-%m-%d %H:%M:%S'))
-                except ValueError:
-                    pass
+            last_modified = None
+            try:
+                last_modified = (datetime
+                                 .fromtimestamp(r.last_modified)
+                                 .strftime('%Y-%m-%d %H:%M:%S'))
+            except ValueError:
+                pass
 
-                values_dict[k] = {
-                    'file_ext': r.file_ext,
-                    'file_type': r.file_type,
-                    'remarks': remarks,
-                    'last_modified': last_modified,
-                    'uploaded': r.uploaded.strftime('%b %d, %Y'),
-                    'valid': True
-                }
+            values_dict[k] = {
+                'file_ext': r.file_ext,
+                'file_type': r.file_type,
+                'remarks': remarks,
+                'last_modified': last_modified,
+                'uploaded': r.uploaded.strftime('%b %d, %Y'),
+                'ftp_suggest': r.ftp_suggest,
+                'valid': True
+            }
 
+            has_changes = True
+
+        else:
+            values_dict[k]['valid'] = True
+
+            if 'ftp_suggest' not in values_dict[k]:
+                values_dict[k]['ftp_suggest'] = r.ftp_suggest
                 has_changes = True
 
-            else:
-                values_dict[k]['valid'] = True
     close_db()
 
     # Create new values list
@@ -1005,7 +1018,8 @@ def update_sheet(dp_prefix, spreadsheetId):
                'file_type',
                'remarks',
                'last_modified',
-               'uploaded']
+               'uploaded',
+               'ftp_suggest']
     new_values = []
     for k, v in sorted(values_dict.viewitems()):
 
@@ -1020,6 +1034,7 @@ def update_sheet(dp_prefix, spreadsheetId):
             row.append(v['remarks'])
             row.append(v['last_modified'])
             row.append(v['uploaded'])
+            row.append(v['ftp_suggest'])
         else:
             row = ['' for _ in range(len(headers))]
             has_changes = True
@@ -1245,7 +1260,7 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
 
     # Get current values table
     sheetName = 'Sheet1'
-    rangeName = sheetName + '!A:F'
+    rangeName = sheetName + '!A:G'
     logger.info('Getting current values from Google Sheet...')
     old_values = gs.get_values(rangeName)
 
@@ -1274,6 +1289,13 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
                 'valid': False
             }
 
+            try:
+                ftp_suggest = row[6]  # G
+                values_dict[(file_server, block)]['ftp_suggest'] = ftp_suggest
+            except IndexError:
+                # Ignore
+                pass
+
         except IndexError:
             has_changes = True
             has_empty_rows = True
@@ -1290,6 +1312,7 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     las_set = set()
     laz_set = set()
     uploaded = datetime.min
+    ftp_suggest_set = set()
     connect_db()
     for r in q:
 
@@ -1307,19 +1330,24 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
                 laz_only = ','.join([str(x) for x in sorted(laz_set)])
                 las_n_laz = ','.join([str(x)
                                       for x in sorted(las_set & laz_set)])
+                ftp_suggest = '\n'.join(sorted(ftp_suggest_set))
 
                 # Check if either the block or the las/laz file list is new
                 if (k not in values_dict or
                     (k in values_dict and
-                        las_only != values_dict[k]['las_only'] and
-                        laz_only != values_dict[k]['laz_only'] and
-                        las_n_laz != values_dict[k]['las_n_laz'])):
+                        las_only != values_dict[k]['las_only'] or
+                        laz_only != values_dict[k]['laz_only'] or
+                        las_n_laz != values_dict[k]['las_n_laz'] or
+                        'ftp_suggest' not in values_dict[k] or
+                        ('ftp_suggest' in values_dict[k] and
+                         ftp_suggest != values_dict[k]['ftp_suggest']))):
 
                     values_dict[k] = {
                         'las_only': las_only,
                         'laz_only': laz_only,
                         'las_n_laz': las_n_laz,
                         'uploaded': uploaded.strftime('%b %d, %Y'),
+                        'ftp_suggest': ftp_suggest,
                         'valid': True
                     }
 
@@ -1333,6 +1361,7 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
             las_set = set()
             laz_set = set()
             uploaded = datetime.min
+            ftp_suggest_set = set()
 
         # Get file name and ext
         fn, ext = os.path.splitext(path_tokens[-1])
@@ -1357,6 +1386,12 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
         elif r.uploaded is None:
             uploaded = datetime.now()
 
+        # Get ftp suggestions
+        if r.ftp_suggest:
+            for p in r.ftp_suggest.split('\n'):
+                dp = os.path.dirname(p)
+                ftp_suggest_set.add(dp)
+
     close_db()
 
     # Create new values list
@@ -1366,7 +1401,8 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
                'las_only',
                'laz_only',
                'las_n_laz',
-               'uploaded']
+               'uploaded',
+               'ftp_suggest']
     new_values = []
     for k, v in sorted(values_dict.viewitems()):
 
@@ -1376,10 +1412,11 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
             row = []
             row.append(file_server)
             row.append(block)
-            row.append(values_dict[k]['las_only'])
-            row.append(values_dict[k]['laz_only'])
-            row.append(values_dict[k]['las_n_laz'])
-            row.append(values_dict[k]['uploaded'])
+            row.append(v['las_only'])
+            row.append(v['laz_only'])
+            row.append(v['las_n_laz'])
+            row.append(v['uploaded'])
+            row.append(v['ftp_suggest'])
         else:
             row = ['' for _ in range(len(headers))]
             has_changes = True
@@ -1406,22 +1443,22 @@ def update_las_tiles_sheet(dp_prefix, spreadsheetId, has_error_only=True):
     new_values.append(['---' for _ in range(len(headers))])
 
     if not has_changes:
-        logger.info('No new results! Exiting.')
+        logger.info('No changes! Exiting.')
         return
 
-    # Get start and end index of empty rows
+    # Get start index of empty rows
     startIndex = None
     endIndex = None
     if has_empty_rows:
         for i in range(len(new_values)):
             if new_values[i][0] == '' and startIndex is None:
                 startIndex = i
-            elif new_values[i][0] != '' and endIndex is None:
+            elif new_values[i][0] != '' and startIndex and endIndex is None:
                 endIndex = i
                 break
 
-        logger.info('startIndex: %s', startIndex)
-        logger.info('endIndex: %s', endIndex)
+        logger.debug('startIndex: %s', startIndex)
+        logger.debug('endIndex: %s', endIndex)
 
     # Update Google Sheeet
     logger.info('Updating Google Sheet...')
@@ -1470,59 +1507,97 @@ def update_properties(gs, dp_prefix, delete_rows=None):
 def find_ftp_suggestions():
     try:
         connect_db()
-        for k, v in BLOCK_NAME_INDEX.viewitems():
+        pool = multiprocessing.Pool(processes=WORKERS)
+        for k, token_id in sorted(BLOCK_NAME_INDEX.viewitems()):
+            logger.info('Finding FTP suggestions for %s...', k)
             q = Result.select().where((Result.file_path.startswith(k)) &
                                       (Result.has_error == True) &
-                                      (Result.is_file == True) &
-                                      (Result.ftp_suggest >> None))
-            with MYSQL_DB.atomic() as txn:
-                for r in q:
-                    # logger.debug('r.file_path: %s', r.file_path)
-                    # Get block name
-                    if os.name == 'nt':
-                        path_tokens = r.file_path.split(os.altsep)
-                    else:
-                        path_tokens = r.file_path.split(os.sep)
-                    if len(path_tokens) >= v + 1:
-                        logger.debug('r.file_path: %s', r.file_path)
-                        block_name = path_tokens[v]
-                        # block_name = 'Agno10A_20130529'
-                        logger.debug('block_name: %s', block_name)
+                                      (Result.is_file == True))
+            counter = 0
+            for r in q:
+                pool.apply_async(find_ftp_suggestions_worker, (r, token_id))
+                counter += 1
+            logger.info('counter: %s', counter)
 
-                        # Get filename
-                        filename = os.path.basename(r.file_path)
-                        # filename = 'pt000001.laz'
-                        logger.debug('filename: %s', filename)
-
-                        # Find file from ftp
-                        match_str = '%' + block_name + '%' + filename
-                        logger.debug('match_str: %s', match_str)
-
-                        match = None
-                        try:
-                            # match = (Result
-                            #          .select()
-                            #          .where((Result.has_error == False) &
-                            #                 (Result.is_file == True) &
-                            #                 (Result.file_server == 'ftp01') &
-                            #                 (Result.file_path % match_str))
-                            #          .get())
-                            match = Result.raw("""
-SELECT *
-FROM result
-WHERE has_error = %s AND is_file = %s
-                                """, False, True)
-                        except Result.DoesNotExist:
-                            pass
-
-                        if match:
-                            logger.info('%s: %s', r.file_path, match.file_path)
-                            break
-                        else:
-                            logger.debug('%s: match not found', r.file_path)
-
+        pool.close()
+        pool.join()
     except Exception:
         logger.exception('Error finding ftp suggestions!')
+    finally:
+        close_db()
+
+
+def find_ftp_suggestions_worker(result, token_id):
+    try:
+        connect_db()
+
+        # Get process id
+        pid = multiprocessing.current_process().pid
+
+        # Get block name
+        logger.debug('[Worker-%s] result.file_path: %s', pid, result.file_path)
+        if os.name == 'nt':
+            path_tokens = result.file_path.split(os.altsep)
+        else:
+            path_tokens = result.file_path.split(os.sep)
+        if len(path_tokens) >= token_id + 1:
+            block_name = path_tokens[token_id]
+            logger.debug('[Worker-%s] block_name: %s', pid, block_name)
+
+            # Get filename
+            filename = os.path.basename(result.file_path)
+            logger.debug('[Worker-%s] filename: %s', pid, filename)
+
+            # Find file from ftp
+            ftp_suggest_buf = []
+            match_str = '%' + block_name + '%' + filename
+            logger.debug('[Worker-%s] match_str: %s', pid, match_str)
+            exact_match = None
+            try:
+                # Try exact match 1st
+                exact_match = (Result
+                               .select()
+                               .where((Result.has_error == False) &
+                                      (Result.is_file == True) &
+                                      (Result.file_server == "ftp01") &
+                                      (Result.file_path % match_str))
+                               .get())
+            except Result.DoesNotExist:
+                pass
+
+            if exact_match:
+                logger.debug('[Worker-%s] Exact: %s',
+                             pid, exact_match.file_path)
+                # break
+                ftp_suggest_buf.append(
+                    'ftp01:' + exact_match.file_path)
+            else:
+                # If no exact match, try similar search
+                similar_query = Result.raw("""
+SELECT *
+FROM result
+WHERE has_error = %s AND
+is_file = %s AND
+file_server = %s AND
+filename = %s
+ORDER BY jaro_winkler_similarity(dir_path, %s) DESC
+LIMIT 10""",
+                                           False, True, 'ftp01',
+                                           filename, block_name)
+                for similar_match in similar_query.execute():
+                    logger.debug('[Worker-%s] Similar: %s',
+                                 pid, similar_match.file_path)
+                    ftp_suggest_buf.append(
+                        'ftp01:' + similar_match.file_path)
+
+            result.ftp_suggest = '\n'.join(ftp_suggest_buf)
+            # Save
+            with MYSQL_DB.atomic() as txn:
+                result.save()
+
+    except Exception:
+        logger.exception('Error running find ftp suggestions worker! (%s)',
+                         result.file_path)
     finally:
         close_db()
 
