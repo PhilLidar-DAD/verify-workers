@@ -398,7 +398,7 @@ def map_network_drives():
 def verify_worker(worker_id):
 
     # Delay start
-    delay = random.randint((worker_id - 1) * 5 + 1, worker_id * 5)
+    delay = random.uniform((worker_id - 1) * 10 + 1, worker_id * 10)
     logger.info('[Worker-%s] Delay start for %ssecs...', worker_id, delay)
     time.sleep(delay)
 
@@ -434,7 +434,7 @@ def verify_worker(worker_id):
         finally:
             close_db()
         # Sleep
-        delay = random.randint(1, 5)
+        delay = random.uniform(1, 10)
         logger.info('[Worker-%s] Sleeping for %ssecs...', worker_id, delay)
         time.sleep(delay)
 
