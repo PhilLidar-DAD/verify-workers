@@ -21,7 +21,7 @@ LOG="verify_workers_server.log"
 PYTHON_CMD="python -u verify_workers.py"
 
 # Empty log
-echo &>LOG
+echo &>$LOG
 
 case $ACTION in
     update)
