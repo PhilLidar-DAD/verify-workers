@@ -395,10 +395,14 @@ def map_network_drives():
             exit(1)
 
 
+def get_delay(min_, max_):
+    return float('%.2f' % random.uniform(min_, max_))
+
+
 def verify_worker(worker_id):
 
     # Delay start
-    delay = random.uniform((worker_id - 1) * 10 + 1, worker_id * 10)
+    delay = get_delay((worker_id - 1) * 10 + 1, worker_id * 10)
     logger.info('[Worker-%s] Delay start for %ssecs...', worker_id, delay)
     time.sleep(delay)
 
@@ -434,85 +438,90 @@ def verify_worker(worker_id):
         finally:
             close_db()
         # Sleep
-        delay = random.uniform(1, 10)
+        delay = get_delay(1, 10)
         logger.info('[Worker-%s] Sleeping for %ssecs...', worker_id, delay)
         time.sleep(delay)
 
 
 def verify_dir(worker_id, job):
 
-    # Set working status
-    with MYSQL_DB.atomic() as txn:
-        job.status = 0
-        job.work_expiry = datetime.now() + timedelta(hours=1)  # set time limit to 1hr
-        job.save()
-
-    # Get local dir path
-    dir_path = os.path.abspath(os.path.join(
-        FILE_SERVERS[job.file_server]['local'], job.dir_path))
-    logger.info('[Worker-%s] Local directory: %s', worker_id, dir_path)
-    if not os.path.isdir(dir_path):
-        logger.error("[Worker-%s] %s doesn't exist! Exiting.", worker_id,
-                     dir_path)
-        # Invalidate directory
+    try:
+        # Set working status
         with MYSQL_DB.atomic() as txn:
-            job.is_dir = False
+            job.status = 0
+            job.work_expiry = datetime.now() + timedelta(hours=1)  # set time limit to 1hr
             job.save()
-        return
 
-    # Get file list
-    logger.info('[Worker-%s] Getting file list...', worker_id)
-    file_list = {}
-    for f in sorted(os.listdir(dir_path)):
-        # Ignore some files/dirs
-        if ignore_file_dir(f):
-            continue
-        fp = os.path.join(dir_path, f)
-        if os.path.isfile(fp):
-            file_list[fp] = None
-    logger.debug('[Worker-%s] file_list:\n%s', worker_id,
-                 pformat(file_list, width=40))
+        # Get local dir path
+        dir_path = os.path.abspath(os.path.join(
+            FILE_SERVERS[job.file_server]['local'], job.dir_path))
+        logger.info('[Worker-%s] Local directory: %s', worker_id, dir_path)
+        if not os.path.isdir(dir_path):
+            logger.error("[Worker-%s] %s doesn't exist! Exiting.", worker_id,
+                         dir_path)
+            # Invalidate directory
+            with MYSQL_DB.atomic() as txn:
+                job.is_dir = False
+                job.save()
+            return
 
-    # Verify files
-    logger.info('[Worker-%s] Verifying files...', worker_id)
-    for fp in file_list.viewkeys():
-        file_list[fp] = verify_file(worker_id, fp)
+        # Get file list
+        logger.info('[Worker-%s] Getting file list...', worker_id)
+        file_list = {}
+        for f in sorted(os.listdir(dir_path)):
+            # Ignore some files/dirs
+            if ignore_file_dir(f):
+                continue
+            fp = os.path.join(dir_path, f)
+            if os.path.isfile(fp):
+                file_list[fp] = None
+        logger.debug('[Worker-%s] file_list:\n%s', worker_id,
+                     pformat(file_list, width=40))
 
-    # Save results to db
-    logger.info('[Worker-%s] Saving results to db...', worker_id)
-    with MYSQL_DB.atomic() as txn:
-        for fp, v in file_list.viewitems():
+        # Verify files
+        logger.info('[Worker-%s] Verifying files...', worker_id)
+        for fp in file_list.viewkeys():
+            file_list[fp] = verify_file(worker_id, fp)
 
-            fp_drv, res = v
+        # Save results to db
+        logger.info('[Worker-%s] Saving results to db...', worker_id)
+        with MYSQL_DB.atomic() as txn:
+            for fp, v in file_list.viewitems():
 
-            logger.debug('[Worker-%s][%s] %s', worker_id, fp_drv, res)
-            if res is not None:
-                # Get file path without drive name
-                drive, tail = os.path.splitdrive(fp_drv)
-                logger.debug('[Worker-%s] %s, %s', worker_id, drive, tail)
-                fp = tail[1:].replace(os.sep, os.altsep)
-                logger.debug('[Worker-%s] fp: %s', worker_id, fp)
-                # Separate dir_path and filename
-                dir_path, filename = os.path.split(fp)
-                res['dir_path'] = dir_path
-                res['filename'] = filename
-                # Add result to db
-                db_res, created = Result.get_or_create(file_server=job.file_server,
-                                                       file_path=fp,
-                                                       defaults=res)
-                logger.debug('%s, %s', db_res, created)
-                # If not created, update result in db
-                if not created:
-                    for k, v in res.viewitems():
-                        exec('db_res.' + k + ' = v')
-                    db_res.save()
+                fp_drv, res = v
 
-        # Set done status
-        job.status = 1
-        job.work_expiry = None
-        job.save()
-        logger.info('[Worker-%s] %s:%s Done!', worker_id, job.file_server,
-                    job.dir_path)
+                logger.debug('[Worker-%s][%s] %s', worker_id, fp_drv, res)
+                if res is not None:
+                    # Get file path without drive name
+                    drive, tail = os.path.splitdrive(fp_drv)
+                    logger.debug('[Worker-%s] %s, %s', worker_id, drive, tail)
+                    fp = tail[1:].replace(os.sep, os.altsep)
+                    logger.debug('[Worker-%s] fp: %s', worker_id, fp)
+                    # Separate dir_path and filename
+                    dir_path, filename = os.path.split(fp)
+                    res['dir_path'] = dir_path
+                    res['filename'] = filename
+                    # Add result to db
+                    db_res, created = Result.get_or_create(file_server=job.file_server,
+                                                           file_path=fp,
+                                                           defaults=res)
+                    logger.debug('%s, %s', db_res, created)
+                    # If not created, update result in db
+                    if not created:
+                        for k, v in res.viewitems():
+                            exec('db_res.' + k + ' = v')
+                        db_res.save()
+
+            # Set done status
+            job.status = 1
+            job.work_expiry = None
+            job.save()
+            logger.info('[Worker-%s] %s:%s Done!', worker_id, job.file_server,
+                        job.dir_path)
+
+    except Exception:
+        logger.exception('[Worker-%s] Error running worker!', worker_id)
+        raise
 
 
 def verify_file(worker_id, file_path_):

@@ -20,7 +20,7 @@ class BaseModel(peewee.Model):
 
 class Job(BaseModel):
     file_server = peewee.CharField()
-    dir_path = peewee.CharField()
+    dir_path = peewee.CharField(max_length=512)
     status = peewee.IntegerField(choices=[(0, 'Working'),
                                           (1, 'Done')],
                                  null=True)
