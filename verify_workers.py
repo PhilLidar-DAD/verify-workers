@@ -56,8 +56,11 @@ def parse_arguments():
     parser_update.add_argument('update_dir_path')
 
     parser_start = subparsers.add_parser('start')
-    parser_start.add_argument('start_target', choices=['workers', 'migrate',
-                                                       'suggest'])
+    parser_start.add_argument('start_target', choices=['workers',
+                                                       'migrate',
+                                                       'suggest',
+                                                       'create_job_table',
+                                                       'create_result_table'])
 
     parser_upload = subparsers.add_parser('upload')
     parser_upload.add_argument('upload_target', choices=['results'])
@@ -233,7 +236,7 @@ def update_worker(file_server, dir_path, dir_paths):
             job_dp = trim_mount_path(dir_path)
             logger.info('[Worker-%s] %s', pid, job_dp)
             # For each content inside the directory
-            status_done = True
+            is_done = True
             for i in sorted(os.listdir(dir_path)):
                 # Ignore some files/dirs
                 if ignore_file_dir(i):
@@ -257,7 +260,7 @@ def update_worker(file_server, dir_path, dir_paths):
                                          & (Result.file_path == result_fp))
                                   .get())
                     except Result.DoesNotExist:
-                        status_done = False
+                        is_done = False
                     if result:
                         # Get file size
                         file_size = os.path.getsize(i_path)
@@ -280,19 +283,19 @@ def update_worker(file_server, dir_path, dir_paths):
                                 # Save
                                 result.save()
                         else:
-                            status_done = False
+                            is_done = False
             # Add dir path as job
             if job_dp:
                 with MYSQL_DB.atomic() as txn:
-                    job, created = Job.get_or_create(file_server=file_server,
-                                                     dir_path=job_dp,
-                                                     defaults={'is_dir': True})
+                    job, created = (Job
+                                    .get_or_create(file_server=file_server,
+                                                   dir_path=job_dp,
+                                                   defaults={'is_dir': True,
+                                                             'is_done': is_done}))
                     # If not created, update result in db
                     if not created:
                         job.is_dir = True
-                        # If there are new files, reset done status
-                        if not status_done:
-                            job.status = None
+                        job.is_done = is_done
                         job.save()
     except Exception:
         logger.exception('Error running update worker! (%s)', dir_path)
@@ -414,24 +417,34 @@ def verify_worker(worker_id):
                 # If worker id is even, get random job
                 job = (Job
                        .select()
-                       .where(((Job.status == None) |
-                               ((Job.status == 0) &
-                                (Job.work_expiry < datetime.now()))) &
-                              (Job.is_dir == True))
+                       .where(
+                           (Job.is_dir == True) &
+                           (Job.is_done == False) &
+                           (
+                               (Job.work_expiry >> None) |
+                               (Job.work_expiry < datetime.now())
+                           )
+                       )
                        .order_by(peewee.fn.Rand())
                        .get())
+                logger.info('[Worker-%s] Found random job: %s:%s', worker_id,
+                            job.file_server, job.dir_path)
             else:
                 # If odd, order by dir path
                 job = (Job
                        .select()
-                       .where(((Job.status == None) |
-                               ((Job.status == 0) &
-                                (Job.work_expiry < datetime.now()))) &
-                              (Job.is_dir == True))
+                       .where(
+                           (Job.is_dir == True) &
+                           (Job.is_done == False) &
+                           (
+                               (Job.work_expiry >> None) |
+                               (Job.work_expiry < datetime.now())
+                           )
+                       )
                        .order_by(Job.dir_path)
                        .get())
-            logger.info('[Worker-%s] Found job: %s:%s', worker_id,
-                        job.file_server, job.dir_path)
+                logger.info('[Worker-%s] Found job: %s:%s', worker_id,
+                            job.file_server, job.dir_path)
             verify_dir(worker_id, job)
         except Exception:
             logger.exception('[Worker-%s] Error running job!', worker_id)
@@ -448,8 +461,8 @@ def verify_dir(worker_id, job):
     try:
         # Set working status
         with MYSQL_DB.atomic() as txn:
-            job.status = 0
-            job.work_expiry = datetime.now() + timedelta(hours=1)  # set time limit to 1hr
+            # set time limit to 2hrs
+            job.work_expiry = datetime.now() + timedelta(hours=2)
             job.save()
 
         # Get local dir path
@@ -485,26 +498,28 @@ def verify_dir(worker_id, job):
 
         # Save results to db
         logger.info('[Worker-%s] Saving results to db...', worker_id)
-        with MYSQL_DB.atomic() as txn:
-            for fp, v in file_list.viewitems():
+        for fp, v in file_list.viewitems():
 
-                fp_drv, res = v
+            fp_drv, res = v
 
-                logger.debug('[Worker-%s][%s] %s', worker_id, fp_drv, res)
-                if res is not None:
-                    # Get file path without drive name
-                    drive, tail = os.path.splitdrive(fp_drv)
-                    logger.debug('[Worker-%s] %s, %s', worker_id, drive, tail)
-                    fp = tail[1:].replace(os.sep, os.altsep)
-                    logger.debug('[Worker-%s] fp: %s', worker_id, fp)
-                    # Separate dir_path and filename
-                    dir_path, filename = os.path.split(fp)
-                    res['dir_path'] = dir_path
-                    res['filename'] = filename
+            logger.debug('[Worker-%s][%s] %s', worker_id, fp_drv, res)
+            if res is not None:
+                # Get file path without drive name
+                drive, tail = os.path.splitdrive(fp_drv)
+                logger.debug('[Worker-%s] %s, %s', worker_id, drive, tail)
+                fp = tail[1:].replace(os.sep, os.altsep)
+                logger.debug('[Worker-%s] fp: %s', worker_id, fp)
+                # Separate dir_path and filename
+                dir_path, filename = os.path.split(fp)
+                res['dir_path'] = dir_path
+                res['filename'] = filename
+
+                with MYSQL_DB.atomic() as txn:
                     # Add result to db
-                    db_res, created = Result.get_or_create(file_server=job.file_server,
-                                                           file_path=fp,
-                                                           defaults=res)
+                    db_res, created = (Result
+                                       .get_or_create(file_server=job.file_server,
+                                                      file_path=fp,
+                                                      defaults=res))
                     logger.debug('%s, %s', db_res, created)
                     # If not created, update result in db
                     if not created:
@@ -512,8 +527,9 @@ def verify_dir(worker_id, job):
                             exec('db_res.' + k + ' = v')
                         db_res.save()
 
+        with MYSQL_DB.atomic() as txn:
             # Set done status
-            job.status = 1
+            job.is_done = True
             job.work_expiry = None
             job.save()
             logger.info('[Worker-%s] %s:%s Done!', worker_id, job.file_server,
@@ -1136,14 +1152,14 @@ def update_summary(spreadsheetId):
             proc_dirs = (Job
                          .select()
                          .where((Job.file_server == dp_prefix) &
-                                (Job.status == True) &
+                                (Job.is_done == True) &
                                 (Job.is_dir == True))
                          .count())
         else:
             proc_dirs = (Job
                          .select()
                          .where((Job.dir_path.startswith(dp_prefix)) &
-                                (Job.status == True) &
+                                (Job.is_done == True) &
                                 (Job.is_dir == True))
                          .count())
         logger.debug('proc_dirs: %s', proc_dirs)
@@ -1655,6 +1671,12 @@ if __name__ == "__main__":
 
         elif args.start_target == 'migrate':
             migrate04()
+
+        elif args.start_target == 'create_job_table':
+            create_job_table()
+
+        elif args.start_target == 'create_result_table':
+            create_result_table()
 
     elif 'upload_target' in args:
 

@@ -21,9 +21,7 @@ class BaseModel(peewee.Model):
 class Job(BaseModel):
     file_server = peewee.CharField()
     dir_path = peewee.CharField(max_length=512)
-    status = peewee.IntegerField(choices=[(0, 'Working'),
-                                          (1, 'Done')],
-                                 null=True)
+    is_done = peewee.BooleanField(default=False)
     work_expiry = peewee.DateTimeField(null=True)
     is_dir = peewee.BooleanField(null=True)
 
@@ -53,6 +51,10 @@ class Result(BaseModel):
         primary_key = peewee.CompositeKey('file_server', 'file_path')
 
 
+class Status(BaseModel):
+    pass
+
+
 def migrate01():
     MYSQL_DB.connect()
     migrator = MySQLMigrator(MYSQL_DB)
@@ -61,6 +63,7 @@ def migrate01():
             migrator.add_column('result', 'file_type', Result.file_type),
             migrator.rename_column('result', 'is_corrupted', 'has_error')
         )
+    MYSQL_DB.close()
 
 
 def migrate02():
@@ -70,6 +73,7 @@ def migrate02():
         migrate(
             migrator.add_column('job', 'is_dir', Job.is_dir),
         )
+    MYSQL_DB.close()
 
 
 def migrate03():
@@ -80,6 +84,7 @@ def migrate03():
             # migrator.add_column('result', 'ftp_suggest', Result.ftp_suggest),
             migrator.add_column('result', 'is_file', Result.is_file),
         )
+    MYSQL_DB.close()
 
 
 def migrate04():
@@ -90,12 +95,21 @@ def migrate04():
             migrator.add_column('result', 'dir_path', Result.dir_path),
             migrator.add_column('result', 'filename', Result.filename),
         )
+    MYSQL_DB.close()
 
 
-def create_tables():
+def create_job_table():
     MYSQL_DB.connect()
     with MYSQL_DB.transaction():
-        MYSQL_DB.create_tables([Job, Result], True)
+        Job.create_table()
+    MYSQL_DB.close()
+
+
+def create_result_table():
+    MYSQL_DB.connect()
+    with MYSQL_DB.transaction():
+        Result.create_table()
+    MYSQL_DB.close()
 
 
 if __name__ == "__main__":
