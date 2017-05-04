@@ -19,11 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
 from __future__ import division
-from datetime import datetime, timedelta
-from google_sheet import GoogleSheet
-from models import *
-from pprint import pprint, pformat
-from settings import *
+
 import argparse
 import distutils
 import json
@@ -37,6 +33,12 @@ import subprocess
 import sys
 import threading
 import time
+
+from datetime import datetime, timedelta
+from google_sheet import GoogleSheet
+from models import *
+from pprint import pprint, pformat
+from settings import *
 
 # Logging settings
 logger = logging.getLogger()
@@ -1126,7 +1128,7 @@ def update_summary(spreadsheetId):
     headers = ['',
                'Processed dirs',
                'Total dirs',
-               'Percentage done',
+               'Scan coverage',
                'No. of files with error',
                'Total no. of files',
                'Percentage of files with error by file count',
@@ -1552,53 +1554,33 @@ def find_ftp_suggestions():
         close_db()
 
 
-def find_ftp_suggestions_worker(result, token_id):
+def get_exact_match(pid, block_name, filename):
+    match_str = '%' + block_name + '%' + filename
+    logger.debug('[Worker-%s] match_str: %s', pid, match_str)
+    exact_match = None
     try:
-        connect_db()
+        exact_match = (Result
+                       .select()
+                       .where((Result.has_error == False) &
+                              (Result.is_file == True) &
+                              (Result.file_server == "ftp01") &
+                              (Result.file_path % match_str))
+                       .get())
+    except Result.DoesNotExist:
+        pass
+    return exact_match
 
-        # Get process id
-        pid = multiprocessing.current_process().pid
 
-        # Get block name
-        logger.debug('[Worker-%s] result.file_path: %s', pid, result.file_path)
-        if os.name == 'nt':
-            path_tokens = result.file_path.split(os.altsep)
-        else:
-            path_tokens = result.file_path.split(os.sep)
-        if len(path_tokens) >= token_id + 1:
-            block_name = path_tokens[token_id]
-            logger.debug('[Worker-%s] block_name: %s', pid, block_name)
-
-            # Get filename
-            filename = os.path.basename(result.file_path)
-            logger.debug('[Worker-%s] filename: %s', pid, filename)
-
-            # Find file from ftp
-            ftp_suggest_buf = []
-            match_str = '%' + block_name + '%' + filename
-            logger.debug('[Worker-%s] match_str: %s', pid, match_str)
-            exact_match = None
-            try:
-                # Try exact match 1st
-                exact_match = (Result
-                               .select()
-                               .where((Result.has_error == False) &
-                                      (Result.is_file == True) &
-                                      (Result.file_server == "ftp01") &
-                                      (Result.file_path % match_str))
-                               .get())
-            except Result.DoesNotExist:
-                pass
-
-            if exact_match:
-                logger.debug('[Worker-%s] Exact: %s',
-                             pid, exact_match.file_path)
-                # break
-                ftp_suggest_buf.append(
-                    'ftp01:' + exact_match.file_path)
-            else:
-                # If no exact match, try similar search
-                similar_query = Result.raw("""
+def find_matches(pid, block_name, filename):
+    ftp_suggest_buf = []
+    # Try exact match 1st
+    exact_match = get_exact_match(pid, block_name, filename)
+    if exact_match:
+        logger.debug('[Worker-%s] Exact: %s', pid, exact_match.file_path)
+        ftp_suggest_buf.append('ftp01:' + exact_match.file_path)
+    else:
+        # If no exact match, try similar search
+        similar_query = Result.raw("""
 SELECT *
 FROM result
 WHERE has_error = %s AND
@@ -1607,24 +1589,54 @@ file_server = %s AND
 filename = %s
 ORDER BY jaro_winkler_similarity(dir_path, %s) DESC
 LIMIT 10""",
-                                           False, True, 'ftp01',
-                                           filename, block_name)
-                for similar_match in similar_query.execute():
-                    logger.debug('[Worker-%s] Similar: %s',
-                                 pid, similar_match.file_path)
-                    ftp_suggest_buf.append(
-                        'ftp01:' + similar_match.file_path)
+                                   False, True, 'ftp01',
+                                   filename, block_name)
+        for similar_match in similar_query.execute():
+            logger.debug('[Worker-%s] Similar: %s', pid,
+                         similar_match.file_path)
+            ftp_suggest_buf.append('ftp01:' + similar_match.file_path)
+    return '\n'.join(ftp_suggest_buf)
 
-            result.ftp_suggest = '\n'.join(ftp_suggest_buf)
-            # Save
-            with MYSQL_DB.atomic() as txn:
-                result.save()
 
-    except Exception:
-        logger.exception('Error running find ftp suggestions worker! (%s)',
-                         result.file_path)
-    finally:
-        close_db()
+def find_ftp_suggestions_worker(result, token_id):
+    while True:
+        break_loop = False
+        try:
+            connect_db()
+            # Get process id
+            pid = multiprocessing.current_process().pid
+            # Get block name
+            logger.debug('[Worker-%s] result.file_path: %s',
+                         pid, result.file_path)
+            if os.name == 'nt':
+                path_tokens = result.file_path.split(os.altsep)
+            else:
+                path_tokens = result.file_path.split(os.sep)
+            if len(path_tokens) >= token_id + 1:
+                block_name = path_tokens[token_id]
+                logger.debug('[Worker-%s] block_name: %s', pid, block_name)
+                # Get filename
+                filename = os.path.basename(result.file_path)
+                logger.debug('[Worker-%s] filename: %s', pid, filename)
+                # Find file from ftp
+                result.ftp_suggest = find_matches(pid, block_name, filename)
+                # Save
+                with MYSQL_DB.atomic() as txn:
+                    result.save()
+            break_loop = True
+        except peewee.OperationalError:
+            logger.exception('Error running find ftp suggestions worker! (%s) \
+Retrying in 5 mins...',
+                             result.file_path)
+            time.sleep(5 * 60)
+        except Exception:
+            logger.exception('Error running find ftp suggestions worker! (%s)',
+                             result.file_path)
+            break_loop = True
+        finally:
+            close_db()
+        if break_loop:
+            break
 
 if __name__ == "__main__":
 
