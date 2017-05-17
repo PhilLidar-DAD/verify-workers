@@ -19,11 +19,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
 from __future__ import division
-from datetime import datetime, timedelta
-from google_sheet import GoogleSheet
-from models import *
-from pprint import pprint, pformat
-from settings import *
+
 import argparse
 import distutils
 import json
@@ -37,6 +33,20 @@ import subprocess
 import sys
 import threading
 import time
+import multiprocessing
+
+from datetime import datetime, timedelta
+from google_sheet import GoogleSheet
+from models import (
+    create_job_table,
+    create_result_table,
+    Job,
+    migrate04
+    MYSQL_DB,
+    Result,
+)
+from pprint import pformat
+from settings import *
 
 # Logging settings
 logger = logging.getLogger()
@@ -107,8 +117,6 @@ def connect_db():
             retry = False
         except Exception:
             delay = random.randint(0, 1000) / 1000.
-            # logger.exception(
-            #     '[Worker-%s] Error connecting to database! Retrying in %ss...', pid, delay)
             logger.exception(
                 'Error connecting to database! Retrying in %ss...', delay)
             retry = True
@@ -151,7 +159,7 @@ def update_dir(update_dir_path):
 result tables...")
     dp_prefix = trim_mount_path(update_dir_path)
     logger.info('dp_prefix: %s', dp_prefix)
-    with MYSQL_DB.atomic() as txn:
+    with MYSQL_DB.atomic():
         # Job
         if dp_prefix:
             query = (Job
@@ -265,8 +273,9 @@ def update_worker(file_server, dir_path, dir_paths):
                         # Get file size
                         file_size = os.path.getsize(i_path)
                         # Get checksums and last modified time
-                        checksum, last_modified = get_checksums(i_path,
-                                                                skip_checksum=True)
+                        (checksum,
+                            last_modified) = get_checksums(i_path,
+                                                           skip_checksum=True)
                         # If checksum matches db or file size and last
                         # modified are the same
                         if ((checksum and checksum == result.checksum) or
@@ -279,19 +288,20 @@ def update_worker(file_server, dir_path, dir_paths):
                                 dirname, filename = os.path.split(result_fp)
                                 result.dir_path = dirname
                                 result.filename = filename
-                            with MYSQL_DB.atomic() as txn:
+                            with MYSQL_DB.atomic():
                                 # Save
                                 result.save()
                         else:
                             is_done = False
             # Add dir path as job
             if job_dp:
-                with MYSQL_DB.atomic() as txn:
-                    job, created = (Job
-                                    .get_or_create(file_server=file_server,
-                                                   dir_path=job_dp,
-                                                   defaults={'is_dir': True,
-                                                             'is_done': is_done}))
+                with MYSQL_DB.atomic():
+                    (job,
+                     created) = (Job
+                                 .get_or_create(file_server=file_server,
+                                                dir_path=job_dp,
+                                                defaults={'is_dir': True,
+                                                          'is_done': is_done}))
                     # If not created, update result in db
                     if not created:
                         job.is_dir = True
@@ -460,7 +470,7 @@ def verify_dir(worker_id, job):
 
     try:
         # Set working status
-        with MYSQL_DB.atomic() as txn:
+        with MYSQL_DB.atomic():
             # set time limit to 2hrs
             job.work_expiry = datetime.now() + timedelta(hours=2)
             job.save()
@@ -473,7 +483,7 @@ def verify_dir(worker_id, job):
             logger.error("[Worker-%s] %s doesn't exist! Exiting.", worker_id,
                          dir_path)
             # Invalidate directory
-            with MYSQL_DB.atomic() as txn:
+            with MYSQL_DB.atomic():
                 job.is_dir = False
                 job.save()
             return
@@ -514,12 +524,13 @@ def verify_dir(worker_id, job):
                 res['dir_path'] = dir_path
                 res['filename'] = filename
 
-                with MYSQL_DB.atomic() as txn:
+                with MYSQL_DB.atomic():
                     # Add result to db
-                    db_res, created = (Result
-                                       .get_or_create(file_server=job.file_server,
-                                                      file_path=fp,
-                                                      defaults=res))
+                    (db_res,
+                     created) = (Result
+                                 .get_or_create(file_server=job.file_server,
+                                                file_path=fp,
+                                                defaults=res))
                     logger.debug('%s, %s', db_res, created)
                     # If not created, update result in db
                     if not created:
@@ -527,7 +538,7 @@ def verify_dir(worker_id, job):
                             exec('db_res.' + k + ' = v')
                         db_res.save()
 
-        with MYSQL_DB.atomic() as txn:
+        with MYSQL_DB.atomic():
             # Set done status
             job.is_done = True
             job.work_expiry = None
@@ -996,7 +1007,7 @@ def update_sheet(dp_prefix, spreadsheetId):
 
         if r.uploaded is None:
             r.uploaded = datetime.now()
-            with MYSQL_DB.atomic() as txn:
+            with MYSQL_DB.atomic():
                 r.save()
 
         if k not in values_dict:
@@ -1126,7 +1137,7 @@ def update_summary(spreadsheetId):
     headers = ['',
                'Processed dirs',
                'Total dirs',
-               'Percentage done',
+               'Scan coverage',
                'No. of files with error',
                'Total no. of files',
                'Percentage of files with error by file count',
@@ -1552,53 +1563,33 @@ def find_ftp_suggestions():
         close_db()
 
 
-def find_ftp_suggestions_worker(result, token_id):
+def get_exact_match(pid, block_name, filename):
+    match_str = '%' + block_name + '%' + filename
+    logger.debug('[Worker-%s] match_str: %s', pid, match_str)
+    exact_match = None
     try:
-        connect_db()
+        exact_match = (Result
+                       .select()
+                       .where((Result.has_error == False) &
+                              (Result.is_file == True) &
+                              (Result.file_server == "ftp01") &
+                              (Result.file_path % match_str))
+                       .get())
+    except Result.DoesNotExist:
+        pass
+    return exact_match
 
-        # Get process id
-        pid = multiprocessing.current_process().pid
 
-        # Get block name
-        logger.debug('[Worker-%s] result.file_path: %s', pid, result.file_path)
-        if os.name == 'nt':
-            path_tokens = result.file_path.split(os.altsep)
-        else:
-            path_tokens = result.file_path.split(os.sep)
-        if len(path_tokens) >= token_id + 1:
-            block_name = path_tokens[token_id]
-            logger.debug('[Worker-%s] block_name: %s', pid, block_name)
-
-            # Get filename
-            filename = os.path.basename(result.file_path)
-            logger.debug('[Worker-%s] filename: %s', pid, filename)
-
-            # Find file from ftp
-            ftp_suggest_buf = []
-            match_str = '%' + block_name + '%' + filename
-            logger.debug('[Worker-%s] match_str: %s', pid, match_str)
-            exact_match = None
-            try:
-                # Try exact match 1st
-                exact_match = (Result
-                               .select()
-                               .where((Result.has_error == False) &
-                                      (Result.is_file == True) &
-                                      (Result.file_server == "ftp01") &
-                                      (Result.file_path % match_str))
-                               .get())
-            except Result.DoesNotExist:
-                pass
-
-            if exact_match:
-                logger.debug('[Worker-%s] Exact: %s',
-                             pid, exact_match.file_path)
-                # break
-                ftp_suggest_buf.append(
-                    'ftp01:' + exact_match.file_path)
-            else:
-                # If no exact match, try similar search
-                similar_query = Result.raw("""
+def find_matches(pid, block_name, filename):
+    ftp_suggest_buf = []
+    # Try exact match 1st
+    exact_match = get_exact_match(pid, block_name, filename)
+    if exact_match:
+        logger.debug('[Worker-%s] Exact: %s', pid, exact_match.file_path)
+        ftp_suggest_buf.append('ftp01:' + exact_match.file_path)
+    else:
+        # If no exact match, try similar search
+        similar_query = Result.raw("""
 SELECT *
 FROM result
 WHERE has_error = %s AND
@@ -1607,24 +1598,55 @@ file_server = %s AND
 filename = %s
 ORDER BY jaro_winkler_similarity(dir_path, %s) DESC
 LIMIT 10""",
-                                           False, True, 'ftp01',
-                                           filename, block_name)
-                for similar_match in similar_query.execute():
-                    logger.debug('[Worker-%s] Similar: %s',
-                                 pid, similar_match.file_path)
-                    ftp_suggest_buf.append(
-                        'ftp01:' + similar_match.file_path)
+                                   False, True, 'ftp01',
+                                   filename, block_name)
+        for similar_match in similar_query.execute():
+            logger.debug('[Worker-%s] Similar: %s', pid,
+                         similar_match.file_path)
+            ftp_suggest_buf.append('ftp01:' + similar_match.file_path)
+    return '\n'.join(ftp_suggest_buf)
 
-            result.ftp_suggest = '\n'.join(ftp_suggest_buf)
-            # Save
-            with MYSQL_DB.atomic() as txn:
-                result.save()
 
-    except Exception:
-        logger.exception('Error running find ftp suggestions worker! (%s)',
-                         result.file_path)
-    finally:
-        close_db()
+def find_ftp_suggestions_worker(result, token_id):
+    while True:
+        break_loop = False
+        try:
+            connect_db()
+            # Get process id
+            pid = multiprocessing.current_process().pid
+            # Get block name
+            logger.debug('[Worker-%s] result.file_path: %s',
+                         pid, result.file_path)
+            if os.name == 'nt':
+                path_tokens = result.file_path.split(os.altsep)
+            else:
+                path_tokens = result.file_path.split(os.sep)
+            if len(path_tokens) >= token_id + 1:
+                block_name = path_tokens[token_id]
+                logger.debug('[Worker-%s] block_name: %s', pid, block_name)
+                # Get filename
+                filename = os.path.basename(result.file_path)
+                logger.debug('[Worker-%s] filename: %s', pid, filename)
+                # Find file from ftp
+                result.ftp_suggest = find_matches(pid, block_name, filename)
+                # Save
+                with MYSQL_DB.atomic():
+                    result.save()
+            break_loop = True
+        except peewee.OperationalError:
+            logger.exception('Error running find ftp suggestions worker! (%s) \
+Retrying in 5 mins...',
+                             result.file_path)
+            time.sleep(5 * 60)
+        except Exception:
+            logger.exception('Error running find ftp suggestions worker! (%s)',
+                             result.file_path)
+            break_loop = True
+        finally:
+            close_db()
+        if break_loop:
+            break
+
 
 if __name__ == "__main__":
 
