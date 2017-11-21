@@ -1,0 +1,8 @@
+client_secret.json
+client_secret.json.bak
+settings.py
+*.pyc
+*.log
+*.bak
+.credentials/*
+.credentials/
