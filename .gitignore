@@ -1,0 +1,5 @@
+*.bak
+*.log
+client_secret.json
+client_secret.json.bak
+
