@@ -3,3 +3,6 @@
 client_secret.json
 .credentials/*
 .credentials/
+*.pyc
+settings.py
+settings.pyc
