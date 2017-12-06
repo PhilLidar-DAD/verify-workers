@@ -41,7 +41,7 @@ from models import (
     create_job_table,
     create_result_table,
     Job,
-    migrate04
+    migrate04,
     MYSQL_DB,
     Result,
 )
