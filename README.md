@@ -35,6 +35,7 @@ https://www.python.org/ftp/python/2.7.13/python-2.7.13.amd64.msi
 proxy = http://datamanager:<password>@proxy.dream.upd.edu.ph:8080
 ```
 (use static ip instead of above)
+
 3. Install virtualenvwrapper for Windows (using Command Prompt)
 
 ```
@@ -65,8 +66,18 @@ Type "help", "copyright", "credits" or "license" for more information.
 
 7. Create settings.py file
 Copy client_secret.json and settings.py from 
-```\\pmsat-nas\geostorage\EXCHANGE\Installers\verify-workers-req````
+```\\pmsat-nas\geostorage\EXCHANGE\Installers\verify-workers-req
+```
 
+to c:\verify-workers
+
+8. Open bin\autologon.exe
+- Accept the EULA
+- type in the password for datamanager
+- click enable
+
+9. copy the startup script to 
+```%appdata%\Microsoft\Windows\Start Menu\Programs\Startup\```
 
 ## Disable Windows Error Reporting UI
 
