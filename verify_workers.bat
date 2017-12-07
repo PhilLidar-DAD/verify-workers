@@ -14,7 +14,7 @@ echo Pulling latest code from branch...
 
 echo.
 echo Setting correct environment variables...
-set PATH=C:\Python27_64bit;C:\Python27_64bit\Scripts;%SystemRoot%\system32
+set PATH=C:\Python27;C:\Python27\Scripts;%SystemRoot%\system32
 set GDAL_DATA=
 set GDAL_DRIVER_PATH=
 
