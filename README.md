@@ -7,6 +7,8 @@ Set Static IP for workstations
 1. Download latest Git for Windows (if not installed)
 
 https://github.com/git-for-windows/git/releases/download/v2.15.1.windows.2/Git-2.15.1.2-64-bit.exe
+
+
 ```\\pmsat-nas\geostorage\EXCHANGE\Installers\verify-workers-req\Git-2.15.1.2-64-bit.exe```
 
 2. Clone repository (Open Git Bash here at C:\)
@@ -22,6 +24,8 @@ git clone https://github.com/PhilLidar-DAD/verify-workers.git
 1. Install latest Python 2.7 64-bit (if not installed) to C:\Python27_64bit\
 
 https://www.python.org/ftp/python/2.7.13/python-2.7.13.amd64.msi
+
+
 ```\\pmsat-nas\geostorage\EXCHANGE\Installers\verify-workers-req\python-2.7.13.amd64.msi```
 
 2. Create %APPDATA%\pip\pip.ini file (resolves to AppData\Roaming\pip\pip.ini) and add the ff. lines
