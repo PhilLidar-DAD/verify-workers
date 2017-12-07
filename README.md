@@ -66,7 +66,8 @@ Type "help", "copyright", "credits" or "license" for more information.
 
 7. Create settings.py file
 Copy client_secret.json and settings.py from 
-```\\pmsat-nas\geostorage\EXCHANGE\Installers\verify-workers-req
+```
+\\pmsat-nas\geostorage\EXCHANGE\Installers\verify-workers-req
 ```
 
 to c:\verify-workers
@@ -77,7 +78,9 @@ to c:\verify-workers
 - click enable
 
 9. copy the startup script to 
-```%appdata%\Microsoft\Windows\Start Menu\Programs\Startup\```
+```
+%appdata%\Microsoft\Windows\Start Menu\Programs\Startup\
+```
 
 ## Disable Windows Error Reporting UI
 
