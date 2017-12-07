@@ -7,6 +7,7 @@ Set Static IP for workstations
 1. Download latest Git for Windows (if not installed)
 
 https://github.com/git-for-windows/git/releases/download/v2.15.1.windows.2/Git-2.15.1.2-64-bit.exe
+\\pmsat-nas\EXCHANGE\Installers\verify-scripts-req\Git-2.15.1.2-64-bit.exe
 
 2. Clone repository (Open Git Bash here at C:\)
 
@@ -21,17 +22,19 @@ git clone https://github.com/PhilLidar-DAD/verify-workers.git
 1. Install latest Python 2.7 64-bit (if not installed) to C:\Python27_64bit\
 
 https://www.python.org/ftp/python/2.7.13/python-2.7.13.amd64.msi
+\\pmsat-nas\EXCHANGE\Installers\verify-scripts-req\python-2.7.13.amd64.msi
 
 2. Create %APPDATA%\pip\pip.ini file (resolves to AppData\Roaming\pip\pip.ini) and add the ff. lines
 
-```[global]
+```
+[global]
 proxy = http://datamanager:<password>@proxy.dream.upd.edu.ph:8080
 ```
-
+(use static ip instead of above)
 3. Install virtualenvwrapper for Windows (using Command Prompt)
 
 ```
-> set PATH=C:\Python27_64bit;C:\Python27_64bit\Scripts;%SystemRoot%\system32
+> set PATH=C:\Python27;C:\Python27\Scripts;%SystemRoot%\system32
 > pip.exe install virtualenvwrapper-win
 ```
 
@@ -57,6 +60,9 @@ Type "help", "copyright", "credits" or "license" for more information.
 ```
 
 7. Create settings.py file
+Copy client_secret.json and settings.py from 
+\\pmsat-nas\EXCHANGE\Installers\verify-scripts-req\
+
 
 ## Disable Windows Error Reporting UI
 
